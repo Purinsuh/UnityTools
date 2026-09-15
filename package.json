@@ -1,0 +1,7 @@
+{
+  "name": "com.mathis.unitytools",
+  "version": "1.0.0",
+  "displayName": "Mathis Unity Toolkit",
+  "description": "Shaders stylises (cell shading, pois manga, outline) et outil d'editeur pour convertir en masse les materials d'une scene vers ces shaders, avec historique et reversion. Pense pour URP.",
+  "unity": "6000.3"
+}
