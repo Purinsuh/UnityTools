@@ -34,6 +34,7 @@ Shader "Custom/ToonAdvanced"
         _RimLightAlign ("Cote eclaire uniquement", Range(0,1)) = 0.5
         _RimAlbedoTint ("Teinte par la couleur de base", Range(0,1)) = 0.5
         _RimDepthThreshold ("Ecart de profondeur min (Depth)", Range(0.01,2)) = 0.15
+        [Enum(Lumiere, 0, Encre, 1)] _RimBlend ("Melange", Float) = 0
 
         [Header(Reflet speculaire)]
         [Toggle(_SPECULAR_ON)] _Specular ("Activer", Float) = 0
@@ -95,6 +96,7 @@ Shader "Custom/ToonAdvanced"
             half _RimLightAlign;
             half _RimAlbedoTint;
             half _RimDepthThreshold;
+            half _RimBlend;
             half4 _SpecularColor;
             half _SpecularSize;
             half _SpecularSoftness;
@@ -375,7 +377,12 @@ Shader "Custom/ToonAdvanced"
 
                 half align = lerp(1.0h, smoothstep(0.35h, 0.65h, mainTerm), _RimLightAlign);
                 half3 rimColor = _RimColor.rgb * lerp(half3(1.0h, 1.0h, 1.0h), albedo, _RimAlbedoTint);
-                color += rim * align * rimColor * mainLight.color;
+                half rimMask = rim * align;
+                // Lumiere : le lisere s'ajoute (eclaircit, suit la lumiere) -> le noir n'a aucun effet.
+                // Encre : le lisere remplace la couleur (independant de l'eclairage) -> un noir donne un vrai contour.
+                half3 rimLit = color + rimMask * rimColor * mainLight.color;
+                half3 rimInk = lerp(color, rimColor, rimMask);
+                color = lerp(rimLit, rimInk, _RimBlend);
             #endif
 
                 // ---- Emissif ----

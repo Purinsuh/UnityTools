@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1
+
+- Liseré : nouveau réglage **Mélange**. « Lumière » (comportement d'avant : le liseré éclaircit, donc un noir est invisible) ou « Encre » (le liseré remplace la couleur : un noir donne un vrai contour sombre, visible même à l'ombre). Les matériaux existants ne changent pas.
+- Outil : passer en « Encre » règle le liseré en noir tout autour de l'objet ; les préréglages remettent le mode « Lumière ».
+
 ## 1.2.0
 
 - Nouvel onglet **Jour / Nuit** dans l'outil : ajoute le composant ToonDayNight à la scène en reprenant l'éclairage actuel (l'image ne change pas), boutons Jour / Crépuscule / Nuit et curseur, annulables avec Ctrl+Z.

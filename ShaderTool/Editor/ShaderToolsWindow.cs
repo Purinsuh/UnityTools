@@ -384,6 +384,31 @@ public class ShaderToolsWindow : EditorWindow
         DrawPopup(mats, reference, "_Rim", "Mode", new[] { "Off", "Fresnel", "Depth" });
         if (reference.GetFloat("_Rim") > 0.5f)
         {
+            if (reference.HasProperty("_RimBlend"))
+            {
+                int blend = Mathf.RoundToInt(reference.GetFloat("_RimBlend"));
+                EditorGUI.BeginChangeCheck();
+                blend = EditorGUILayout.Popup(new GUIContent("Melange",
+                    "Lumiere : le lisere eclaircit le bord (un noir n'a aucun effet).\nEncre : le lisere remplace la couleur, pour un contour sombre."),
+                    blend, new[] { "Lumiere (eclaircit)", "Encre (contour)" });
+                if (EditorGUI.EndChangeCheck())
+                {
+                    foreach (var mat in mats)
+                    {
+                        Undo.RecordObject(mat, "Melange du lisere");
+                        mat.SetFloat("_RimBlend", blend);
+                        // Passage en Encre : contour noir tout autour (le reglage "cote eclaire" le couperait d'un cote)
+                        if (blend == 1)
+                        {
+                            mat.SetColor("_RimColor", Color.black);
+                            mat.SetFloat("_RimLightAlign", 0f);
+                            mat.SetFloat("_RimAlbedoTint", 0f);
+                        }
+                        EditorUtility.SetDirty(mat);
+                    }
+                    SceneView.RepaintAll();
+                }
+            }
             DrawColor(mats, reference, "_RimColor", "Couleur", true);
             DrawFloatSlider(mats, reference, "_RimWidth", "Largeur", 0f, 1f);
             DrawFloatSlider(mats, reference, "_RimSoftness", "Douceur", 0.001f, 0.5f);
@@ -622,6 +647,8 @@ public class ShaderToolsWindow : EditorWindow
                 mat.SetFloat("_RimLightAlign", preset.rimAlign);
                 mat.SetFloat("_RimAlbedoTint", preset.rimTint);
                 mat.SetFloat("_RimDepthThreshold", preset.rimDepthThreshold);
+                if (mat.HasProperty("_RimBlend"))
+                    mat.SetFloat("_RimBlend", 0f); // les prereglages utilisent un lisere lumineux
             }
             // Le reflet est DESACTIVE par le prereglage : sur les grandes surfaces planes (murs, sol)
             // il forme une grosse tache floue. On regle juste ses valeurs, a reactiver a la main
