@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.2
+
+- Conversion : reprend aussi la texture / couleur des materials **glTF** (importés avec glTFast, ex. modèles Sketchfab) et **Built-in** (`_MainTex` / `_Color`). Avant, ces materials étaient convertis sans leur texture.
+- Conversion : un material rangé dans un modèle (.glb, .fbx…) donne un fichier préfixé par le nom du modèle (`M_ToonAdvanced_citlali_material_0`), pour ne plus écraser les conversions d'un autre modèle aux noms génériques.
+
 ## 1.2.1
 
 - Liseré : nouveau réglage **Mélange**. « Lumière » (comportement d'avant : le liseré éclaircit, donc un noir est invisible) ou « Encre » (le liseré remplace la couleur : un noir donne un vrai contour sombre, visible même à l'ombre). Les matériaux existants ne changent pas.

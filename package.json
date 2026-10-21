@@ -1,6 +1,6 @@
 {
   "name": "com.mathis.unitytools",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "displayName": "Mathis Unity Toolkit",
   "description": "Shaders stylises (toon facon Genshin/ZZZ, cell shading, pois manga, outline), cycle jour/nuit, et outil d'editeur pour convertir en masse les materials d'une scene vers ces shaders, avec historique et reversion. Pense pour URP.",
   "unity": "6000.3"

@@ -976,7 +976,7 @@ public class ShaderToolsWindow : EditorWindow
             Material original = entry.material;
             // Prefixe propre au shader cible : sans ca, convertir vers un autre shader reutiliserait
             // (et modifierait) les materials M_Cel_ deja utilises par d'autres scenes.
-            string newMatPath = materialsFolder + "/" + GetMaterialPrefix(targetShader) + StripToolPrefix(original.name) + ".mat";
+            string newMatPath = materialsFolder + "/" + GetMaterialPrefix(targetShader) + GetSourceName(original) + ".mat";
 
             Material celMat = AssetDatabase.LoadAssetAtPath<Material>(newMatPath);
             bool isNewMaterial = celMat == null;
@@ -992,15 +992,7 @@ public class ShaderToolsWindow : EditorWindow
                 celMat.shader = targetShader;
             }
 
-            if (original.HasProperty("_BaseMap") && celMat.HasProperty("_BaseMap"))
-            {
-                celMat.SetTexture("_BaseMap", original.GetTexture("_BaseMap"));
-                // Tiling / offset aussi, sinon les motifs (tapis, sol quadrille...) changent d'echelle
-                celMat.SetTextureScale("_BaseMap", original.GetTextureScale("_BaseMap"));
-                celMat.SetTextureOffset("_BaseMap", original.GetTextureOffset("_BaseMap"));
-            }
-            if (original.HasProperty("_BaseColor") && celMat.HasProperty("_BaseColor"))
-                celMat.SetColor("_BaseColor", original.GetColor("_BaseColor"));
+            CopyBaseColor(original, celMat);
 
             // Un objet qui brillait (emission du Lit) continue de briller apres conversion
             if (original.IsKeywordEnabled("_EMISSION") && celMat.HasProperty("_UseEmission"))
@@ -1048,6 +1040,50 @@ public class ShaderToolsWindow : EditorWindow
         EditorUtility.DisplayDialog("Conversion terminee", converted + " material(s) converti(s) vers " + targetShader.name + ".\n\nCtrl+Z pour annuler dans l'immediat, ou l'onglet Historique plus tard (meme apres avoir rouvert le projet).", "OK");
 
         MarkSceneDataDirty();
+    }
+
+    // Noms de la texture / couleur de base selon l'origine du material :
+    // URP (Lit, Simple Lit...), Built-in (Standard), glTF importe par glTFast (modeles Sketchfab...)
+    private static readonly string[][] BaseColorNames =
+    {
+        new[] { "_BaseMap", "_BaseColor" },
+        new[] { "_MainTex", "_Color" },
+        new[] { "baseColorTexture", "baseColorFactor" },
+    };
+
+    private static void CopyBaseColor(Material source, Material target)
+    {
+        foreach (var names in BaseColorNames)
+        {
+            string texName = names[0], colorName = names[1];
+            if (!source.HasProperty(texName) && !source.HasProperty(colorName)) continue;
+
+            if (source.HasProperty(texName) && target.HasProperty("_BaseMap"))
+            {
+                target.SetTexture("_BaseMap", source.GetTexture(texName));
+                // Tiling / offset aussi, sinon les motifs (tapis, sol quadrille...) changent d'echelle
+                target.SetTextureScale("_BaseMap", source.GetTextureScale(texName));
+                target.SetTextureOffset("_BaseMap", source.GetTextureOffset(texName));
+            }
+            if (source.HasProperty(colorName) && target.HasProperty("_BaseColor"))
+            {
+                // Alpha a 1 : ToonAdvanced est opaque, une transparence partielle n'a pas de sens ici
+                Color c = source.GetColor(colorName);
+                c.a = 1f;
+                target.SetColor("_BaseColor", c);
+            }
+            return;
+        }
+    }
+
+    // Material range DANS un modele (glb, fbx...) : noms souvent generiques ("material_0") et identiques
+    // d'un modele a l'autre -> on prefixe par le nom du fichier pour ne pas ecraser les conversions d'un autre modele.
+    private static string GetSourceName(Material original)
+    {
+        string name = StripToolPrefix(original.name);
+        if (AssetDatabase.IsSubAsset(original))
+            name = Path.GetFileNameWithoutExtension(AssetDatabase.GetAssetPath(original)) + "_" + name;
+        return name;
     }
 
     private static string GetMaterialPrefix(Shader shader)
