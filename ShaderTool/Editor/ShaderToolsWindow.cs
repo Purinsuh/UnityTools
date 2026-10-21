@@ -1,14 +1,17 @@
 using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 
 public class ShaderToolsWindow : EditorWindow
 {
     private const string ShaderFlat = "Custom/MangaDotsOutline";
     private const string ShaderTextured = "Custom/MangaDotsOutlineTextured";
+    private const string ShaderToon = "Custom/ToonAdvanced";
     private const string DefaultCelShader = "Custom/CelShading";
     private const string DefaultMaterialsFolder = "Assets/ShaderTools/Materials";
+    private const string DefaultRampFolder = "Assets/ShaderTools/Ramps";
     private const string HistoryAssetPath = "Assets/ShaderTools/Materials/MaterialConversionHistory.asset";
 
     [MenuItem("Tools/Outils Shaders/Editeur")]
@@ -18,47 +21,114 @@ public class ShaderToolsWindow : EditorWindow
         window.minSize = new Vector2(380, 480);
     }
 
-    private int tab;
-    private Vector2 scroll;
+    // Serialises : l'onglet, la position de defilement et le filtre survivent a une recompilation
+    [SerializeField] private int tab;
+    [SerializeField] private Vector2 scroll;
+
+    // Grosses scenes : rien n'est rescanne a chaque evenement. On pose un marqueur "a refaire",
+    // et le recalcul a lieu au prochain affichage, seulement si l'onglet concerne est ouvert.
+    private bool sceneDataDirty = true;
+    private bool historyDirty = true;
+    private HashSet<Renderer> selectedRenderersCache;
+    private HashSet<Material> selectedMaterialsCache;
 
     private void OnEnable()
     {
-        Selection.selectionChanged += Repaint;
+        Selection.selectionChanged += OnSelectionChanged;
         EditorApplication.hierarchyChanged += OnHierarchyChanged;
-        RefreshMaterialList();
-        RefreshHistory();
+        ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
+        if (targetShader == null)
+            targetShader = Shader.Find(DefaultCelShader);
+        MarkSceneDataDirty();
     }
 
     private void OnDisable()
     {
-        Selection.selectionChanged -= Repaint;
+        Selection.selectionChanged -= OnSelectionChanged;
         EditorApplication.hierarchyChanged -= OnHierarchyChanged;
+        ObjectChangeEvents.changesPublished -= OnObjectChangesPublished;
+    }
+
+    private void OnSelectionChanged()
+    {
+        InvalidateSelectionCache();
+        Repaint();
     }
 
     private void OnHierarchyChanged()
     {
         // Evite que la liste garde des references vers des objets supprimes/renommes
         // entre deux clics manuels sur "Rafraichir".
-        RefreshMaterialList();
+        MarkSceneDataDirty();
+    }
+
+    // Changer le material d'un Renderer (glisser-deposer dans l'Inspector...) ne declenche pas hierarchyChanged
+    private void OnObjectChangesPublished(ref ObjectChangeEventStream stream)
+    {
+        for (int i = 0; i < stream.length; i++)
+        {
+            if (stream.GetEventType(i) != ObjectChangeKind.ChangeGameObjectOrComponentProperties) continue;
+            stream.GetChangeGameObjectOrComponentPropertiesEvent(i, out var data);
+            if (EditorUtility.EntityIdToObject(data.instanceId) is Renderer)
+            {
+                MarkSceneDataDirty();
+                return;
+            }
+        }
+    }
+
+    private void MarkSceneDataDirty()
+    {
+        sceneDataDirty = true;
+        historyDirty = true;
+        InvalidateSelectionCache();
         Repaint();
+    }
+
+    private void InvalidateSelectionCache()
+    {
+        selectedRenderersCache = null;
+        selectedMaterialsCache = null;
     }
 
     private void OnGUI()
     {
-        tab = GUILayout.Toolbar(tab, new[] { "Reglages", "Conversion", "Historique" });
+        // Recalculs uniquement pendant la passe Layout : les donnees ne changent pas entre la passe
+        // Layout et la passe Repaint d'une meme image (sinon erreur "Invalid GUILayout state").
+        if (Event.current.type == EventType.Layout)
+        {
+            if (tab == 1 && sceneDataDirty)
+            {
+                RefreshMaterialList();
+                sceneDataDirty = false;
+            }
+            if (tab == 2 && historyDirty)
+            {
+                RefreshHistory();
+                historyDirty = false;
+            }
+        }
+
+        tab = GUILayout.Toolbar(tab, new[] { "Reglages", "Conversion", "Historique", "Ramp" });
         EditorGUILayout.Space();
 
         if (tab == 0) DrawSettingsTab();
         else if (tab == 1) DrawConversionTab();
-        else DrawHistoryTab();
+        else if (tab == 2) DrawHistoryTab();
+        else DrawRampTab();
     }
 
     // =====================================================================
     // Onglet 1 : reglages rapides (pois / outline / degrade) sur la selection
     // =====================================================================
 
+    // Mis en cache : la fenetre se redessine a chaque mouvement de souris, et parcourir les enfants
+    // d'une grosse selection (des milliers d'objets) a chaque fois coute plusieurs millisecondes.
+    // Le cache est vide quand la selection, la hierarchie ou un material de Renderer change.
     private HashSet<Renderer> GetSelectedRenderers()
     {
+        if (selectedRenderersCache != null) return selectedRenderersCache;
+
         // GetComponentsInChildren (et pas juste GetComponent) car sur beaucoup de props/prefabs
         // (ex: BasketBallNet) le Renderer est sur un enfant, pas sur l'objet selectionne lui-meme.
         var set = new HashSet<Renderer>();
@@ -67,61 +137,76 @@ public class ShaderToolsWindow : EditorWindow
             foreach (var rend in go.GetComponentsInChildren<Renderer>(true))
                 set.Add(rend);
         }
+        selectedRenderersCache = set;
         return set;
     }
 
     private HashSet<Material> GetSelectedMaterials()
     {
+        if (selectedMaterialsCache != null) return selectedMaterialsCache;
+
         var set = new HashSet<Material>();
         foreach (var rend in GetSelectedRenderers())
         {
+            if (rend == null) continue;
             foreach (var m in rend.sharedMaterials)
                 if (m != null) set.Add(m);
         }
+        selectedMaterialsCache = set;
         return set;
     }
 
     private List<Material> GetCompatibleMaterials()
     {
-        var mats = new List<Material>();
-        foreach (var go in Selection.gameObjects)
-        {
-            var rend = go.GetComponent<Renderer>();
-            if (rend == null || rend.sharedMaterial == null) continue;
-            var mat = rend.sharedMaterial;
-            if (mat.shader == null) continue;
-            if (mat.shader.name == ShaderFlat || mat.shader.name == ShaderTextured)
-            {
-                if (!mats.Contains(mat))
-                    mats.Add(mat);
-            }
-        }
-        return mats;
+        // Meme logique que la Conversion : enfants inclus et tous les slots de material
+        return GetSelectedMaterials()
+            .Where(m => m.shader != null && (m.shader.name == ShaderFlat || m.shader.name == ShaderTextured || m.shader.name == ShaderToon))
+            .OrderBy(m => m.name)
+            .ToList();
     }
 
     private void DrawSettingsTab()
     {
         var mats = GetCompatibleMaterials();
 
-        EditorGUILayout.LabelField("Manga Dots Outline - Editeur rapide", EditorStyles.boldLabel);
+        EditorGUILayout.LabelField("Editeur rapide (selection)", EditorStyles.boldLabel);
         EditorGUILayout.Space();
 
         if (mats.Count == 0)
         {
             EditorGUILayout.HelpBox(
                 "Selectionne dans la Hierarchy un ou plusieurs objets utilisant le shader\n" +
-                "'Custom/MangaDotsOutline' ou 'Custom/MangaDotsOutlineTextured'.",
+                "'Custom/ToonAdvanced', 'Custom/MangaDotsOutline' ou 'Custom/MangaDotsOutlineTextured'.",
                 MessageType.Info);
             return;
         }
 
+        // Sur une grosse selection, lister tous les noms repousserait les reglages hors de la fenetre
+        const int maxNames = 12;
+        string names = string.Join(", ", mats.Take(maxNames).Select(m => m.name));
+        if (mats.Count > maxNames) names += " (+" + (mats.Count - maxNames) + " autres)";
         EditorGUILayout.HelpBox(
-            mats.Count + " material(s) compatible(s) detecte(s) dans la selection :\n" +
-            string.Join(", ", mats.Select(m => m.name)),
+            mats.Count + " material(s) compatible(s) detecte(s) dans la selection :\n" + names,
             MessageType.None);
         EditorGUILayout.Space();
 
         scroll = EditorGUILayout.BeginScrollView(scroll);
+
+        var toonMats = mats.Where(m => m.shader.name == ShaderToon).ToList();
+        if (toonMats.Count > 0)
+            DrawToonSettings(toonMats);
+
+        var mangaMats = mats.Where(m => m.shader.name != ShaderToon).ToList();
+        if (mangaMats.Count > 0)
+            DrawMangaDotsSettings(mangaMats);
+
+        EditorGUILayout.EndScrollView();
+    }
+
+    private void DrawMangaDotsSettings(List<Material> mats)
+    {
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Manga Dots Outline (" + mats.Count + ")", EditorStyles.largeLabel);
 
         Material reference = mats[0];
 
@@ -157,8 +242,309 @@ public class ShaderToolsWindow : EditorWindow
             DrawFloatSlider(texMats, texMats[0], "_ShadowStrength", "Force de l'ombre (bas)", 0f, 1f);
             DrawColor(texMats, texMats[0], "_DotColor", "Couleur des pois (encre)");
         }
+    }
 
-        EditorGUILayout.EndScrollView();
+    private void DrawToonSettings(List<Material> mats)
+    {
+        Material reference = mats[0];
+        EditorGUILayout.LabelField("Toon Advanced (" + mats.Count + ")", EditorStyles.largeLabel);
+
+        EditorGUILayout.LabelField("Prereglages (ecrase les valeurs ci-dessous)", EditorStyles.miniBoldLabel);
+        EditorGUILayout.BeginHorizontal();
+        foreach (var preset in ToonPresets)
+        {
+            if (GUILayout.Button(new GUIContent(preset.label, preset.tooltip)))
+                ApplyToonPreset(mats, preset, rampFolder, presetForDecor);
+        }
+        EditorGUILayout.EndHorizontal();
+        presetForDecor = EditorGUILayout.ToggleLeft(new GUIContent(
+            "Version decor : sans lisere (murs, sols, plafonds)",
+            "Meme look que le prereglage, mais le lisere est coupe. Sur les grandes surfaces il ne se voit presque pas " +
+            "et c'est la que se trouvent la plupart des pixels de l'ecran : autant ne pas le calculer."), presetForDecor);
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Ombres", EditorStyles.boldLabel);
+        DrawToggle(mats, reference, "_UseRamp", "Utiliser une Ramp");
+        if (reference.GetFloat("_UseRamp") > 0.5f)
+        {
+            DrawRampTextureField(mats, reference);
+            var atlas = ReadAtlasData(reference.GetTexture("_RampMap"));
+            if (atlas != null)
+            {
+                int current = Mathf.Clamp(Mathf.RoundToInt(reference.GetFloat("_RampRow")), 0, atlas.names.Length - 1);
+                EditorGUI.BeginChangeCheck();
+                int row = EditorGUILayout.Popup(new GUIContent("Ligne de l'atlas", atlas.hasNight ? "Version jour/nuit incluse" : "Pas de version nuit"), current, atlas.names);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    SetRampRow(mats, row);
+                    SceneView.RepaintAll();
+                }
+            }
+        }
+        else
+            DrawColor(mats, reference, "_ShadowColor", "Teinte d'ombre");
+        DrawFloatSlider(mats, reference, "_ShadowSaturation", "Saturation des ombres", 0f, 1f);
+        DrawFloatSlider(mats, reference, "_ShadowThreshold", "Seuil ombre / lumiere", 0f, 1f);
+        DrawFloatSlider(mats, reference, "_ShadowSmoothness", "Douceur du bord", 0.001f, 0.5f);
+        DrawFloatSlider(mats, reference, "_ReceiveShadowStrength", "Force des ombres portees", 0f, 1f);
+        DrawFloatSlider(mats, reference, "_AmbientStrength", "Lumiere ambiante", 0f, 1f);
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Rim Light (lisere)", EditorStyles.boldLabel);
+        DrawPopup(mats, reference, "_Rim", "Mode", new[] { "Off", "Fresnel", "Depth" });
+        if (reference.GetFloat("_Rim") > 0.5f)
+        {
+            DrawColor(mats, reference, "_RimColor", "Couleur", true);
+            DrawFloatSlider(mats, reference, "_RimWidth", "Largeur", 0f, 1f);
+            DrawFloatSlider(mats, reference, "_RimSoftness", "Douceur", 0.001f, 0.5f);
+            DrawFloatSlider(mats, reference, "_RimLightAlign", "Cote eclaire uniquement", 0f, 1f);
+            DrawFloatSlider(mats, reference, "_RimAlbedoTint", "Teinte par la couleur de base", 0f, 1f);
+            if (reference.GetFloat("_Rim") > 1.5f)
+                DrawFloatSlider(mats, reference, "_RimDepthThreshold", "Ecart de profondeur min", 0.01f, 2f);
+        }
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Reflet speculaire", EditorStyles.boldLabel);
+        DrawToggle(mats, reference, "_Specular", "Activer");
+        if (reference.GetFloat("_Specular") > 0.5f)
+        {
+            DrawColor(mats, reference, "_SpecularColor", "Couleur", true);
+            DrawFloatSlider(mats, reference, "_SpecularSize", "Taille", 0f, 0.5f);
+            DrawFloatSlider(mats, reference, "_SpecularSoftness", "Douceur", 0.001f, 0.2f);
+        }
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Reflet metal (MatCap)", EditorStyles.boldLabel);
+        DrawToggle(mats, reference, "_UseMatCap", "Activer");
+        if (reference.HasProperty("_UseMatCap") && reference.GetFloat("_UseMatCap") > 0.5f)
+        {
+            DrawTexture(mats, reference, "_MatCapMap", "MatCap");
+            if (GUILayout.Button("Utiliser la MatCap metal par defaut"))
+            {
+                var matcap = GetOrCreateDefaultMatCap(rampFolder + "/" + DefaultMatCapName + ".png");
+                foreach (var mat in mats)
+                {
+                    Undo.RecordObject(mat, "MatCap par defaut");
+                    mat.SetTexture("_MatCapMap", matcap);
+                    EditorUtility.SetDirty(mat);
+                }
+                SceneView.RepaintAll();
+            }
+            DrawFloatSlider(mats, reference, "_MatCapStrength", "Force", 0f, 1f);
+            DrawFloatSlider(mats, reference, "_MatCapAdditive", "Mode (0 metal - 1 brillance)", 0f, 1f);
+            DrawTexture(mats, reference, "_MatCapMask", "Masque (blanc = metal)");
+        }
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Lumieres secondaires", EditorStyles.boldLabel);
+        DrawFloatSlider(mats, reference, "_AdditionalLightsStrength", "Intensite", 0f, 2f);
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Emissif (neons, ecrans, lampes)", EditorStyles.boldLabel);
+        DrawToggle(mats, reference, "_UseEmission", "Activer");
+        if (reference.HasProperty("_UseEmission") && reference.GetFloat("_UseEmission") > 0.5f)
+        {
+            DrawColor(mats, reference, "_EmissionColor", "Couleur (HDR, > 1 = bloom)", true);
+            DrawTexture(mats, reference, "_EmissionMap", "Masque (blanc = brille)");
+        }
+    }
+
+    // Les proprietes avec [Toggle] / [KeywordEnum] dans le shader pilotent un mot-cle : apres avoir change
+    // la valeur, ApplyMaterialPropertyDrawers active/desactive le mot-cle correspondant (comme l'Inspector).
+    private void DrawToggle(List<Material> targets, Material reference, string property, string label)
+    {
+        if (!reference.HasProperty(property)) return;
+        bool current = reference.GetFloat(property) > 0.5f;
+        EditorGUI.BeginChangeCheck();
+        bool newValue = EditorGUILayout.Toggle(label, current);
+        if (EditorGUI.EndChangeCheck())
+            SetFloatWithKeywords(targets, property, newValue ? 1f : 0f, label);
+    }
+
+    private void DrawPopup(List<Material> targets, Material reference, string property, string label, string[] options)
+    {
+        if (!reference.HasProperty(property)) return;
+        int current = Mathf.RoundToInt(reference.GetFloat(property));
+        EditorGUI.BeginChangeCheck();
+        int newValue = EditorGUILayout.Popup(label, current, options);
+        if (EditorGUI.EndChangeCheck())
+            SetFloatWithKeywords(targets, property, newValue, label);
+    }
+
+    private void SetFloatWithKeywords(List<Material> targets, string property, float value, string label)
+    {
+        foreach (var mat in targets)
+        {
+            if (!mat.HasProperty(property)) continue;
+            Undo.RecordObject(mat, "Modifier " + label);
+            mat.SetFloat(property, value);
+            MaterialEditor.ApplyMaterialPropertyDrawers(mat);
+            EditorUtility.SetDirty(mat);
+        }
+        SceneView.RepaintAll();
+    }
+
+    // Comme DrawTexture, mais regle aussi la disposition (ramp simple ou atlas) lue par le shader
+    private void DrawRampTextureField(List<Material> targets, Material reference)
+    {
+        EditorGUI.BeginChangeCheck();
+        var newValue = (Texture2D)EditorGUILayout.ObjectField("Ramp / atlas (onglet Ramp)", reference.GetTexture("_RampMap"), typeof(Texture2D), false);
+        if (EditorGUI.EndChangeCheck())
+        {
+            foreach (var mat in targets)
+            {
+                Undo.RecordObject(mat, "Modifier la ramp");
+                mat.SetTexture("_RampMap", newValue);
+                ApplyRampLayout(mat, newValue);
+                EditorUtility.SetDirty(mat);
+            }
+            SceneView.RepaintAll();
+        }
+    }
+
+    private void DrawTexture(List<Material> targets, Material reference, string property, string label)
+    {
+        if (!reference.HasProperty(property)) return;
+        Texture current = reference.GetTexture(property);
+        EditorGUI.BeginChangeCheck();
+        Texture newValue = (Texture)EditorGUILayout.ObjectField(label, current, typeof(Texture2D), false);
+        if (EditorGUI.EndChangeCheck())
+        {
+            foreach (var mat in targets)
+            {
+                if (!mat.HasProperty(property)) continue;
+                Undo.RecordObject(mat, "Modifier " + label);
+                mat.SetTexture(property, newValue);
+                EditorUtility.SetDirty(mat);
+            }
+            SceneView.RepaintAll();
+        }
+    }
+
+    // =====================================================================
+    // Prereglages Toon Advanced : une ramp (generee si absente) + les reglages de rim / speculaire
+    // =====================================================================
+
+    private class ToonPreset
+    {
+        public string label;
+        public string tooltip;
+        public string rampName;
+        public Color[] rampColors;
+        public float[] rampTimes;
+        public bool rampHardEdges;
+        public float shadowSaturation;
+        public float threshold;
+        public float smoothness;
+        public float ambient;
+        public int rimMode;
+        public Color rimColor;
+        public float rimWidth;
+        public float rimSoftness;
+        public float rimAlign;
+        public float rimTint;
+        public float rimDepthThreshold;
+        public Color specularColor;
+        public float specularSize;
+        public float specularSoftness;
+    }
+
+    private static readonly ToonPreset[] ToonPresets =
+    {
+        new ToonPreset
+        {
+            label = "Doux (Genshin)",
+            tooltip = "Ombres lavande douces, lisere fin teinte par la couleur de l'objet, reflet discret (a activer sur les objets brillants).",
+            rampName = "Ramp_Doux",
+            rampColors = new[] { new Color(0.62f, 0.60f, 0.80f), new Color(0.74f, 0.71f, 0.88f), new Color(1f, 0.97f, 0.94f), Color.white },
+            rampTimes = new[] { 0.2f, 0.44f, 0.52f, 1f },
+            rampHardEdges = false,
+            shadowSaturation = 0.35f,
+            threshold = 0.5f, smoothness = 0.04f, ambient = 0.15f,
+            rimMode = 2, rimColor = new Color(1f, 0.97f, 0.9f), rimWidth = 0.25f, rimSoftness = 0.05f, rimAlign = 0.9f, rimTint = 0.6f, rimDepthThreshold = 0.15f,
+            specularColor = new Color(0.35f, 0.35f, 0.35f), specularSize = 0.03f, specularSoftness = 0.02f
+        },
+        new ToonPreset
+        {
+            label = "Contraste (ZZZ)",
+            tooltip = "Ombres bleu-violet franches en 2 tons, lisere blanc marque, reflet net (a activer sur les objets brillants).",
+            rampName = "Ramp_Contraste",
+            rampColors = new[] { new Color(0.6f, 0.62f, 0.82f), Color.white },
+            rampTimes = new[] { 0.5f, 1f },
+            rampHardEdges = true,
+            shadowSaturation = 0.25f,
+            threshold = 0.5f, smoothness = 0.01f, ambient = 0.1f,
+            rimMode = 2, rimColor = new Color(1.3f, 1.3f, 1.3f), rimWidth = 0.4f, rimSoftness = 0.02f, rimAlign = 0.8f, rimTint = 0.2f, rimDepthThreshold = 0.15f,
+            specularColor = new Color(0.6f, 0.6f, 0.6f), specularSize = 0.04f, specularSoftness = 0.005f
+        },
+        new ToonPreset
+        {
+            label = "Simple (2 tons)",
+            tooltip = "Equivalent du CelShading actuel : pas de ramp, pas de lisere.",
+            rampName = null,
+            threshold = 0.5f, smoothness = 0.05f, ambient = 0.1f,
+            rimMode = 0,
+            specularColor = new Color(0.35f, 0.35f, 0.35f), specularSize = 0.03f, specularSoftness = 0.02f
+        },
+    };
+
+    [SerializeField] private bool presetForDecor;
+
+    // Point d'entree scriptable (ex: depuis un autre outil ou un script d'automatisation)
+    public static void ApplyToonPreset(List<Material> mats, int presetIndex, bool decor = false)
+    {
+        ApplyToonPreset(mats, ToonPresets[presetIndex], DefaultRampFolder, decor);
+    }
+
+    private static void ApplyToonPreset(List<Material> mats, ToonPreset preset, string rampFolder, bool decor)
+    {
+        Texture2D ramp = null;
+        if (preset.rampName != null)
+        {
+            string rampPath = rampFolder + "/" + preset.rampName + ".png";
+            ramp = AssetDatabase.LoadAssetAtPath<Texture2D>(rampPath);
+            if (ramp == null)
+                ramp = SaveRampTexture(MakeGradient(preset.rampColors, preset.rampTimes, preset.rampHardEdges), rampPath, 256, preset.rampHardEdges);
+        }
+
+        Undo.SetCurrentGroupName("Prereglage " + preset.label);
+        int undoGroup = Undo.GetCurrentGroup();
+        foreach (var mat in mats)
+        {
+            Undo.RecordObject(mat, "Prereglage " + preset.label);
+            mat.SetFloat("_UseRamp", ramp != null ? 1f : 0f);
+            if (ramp != null)
+            {
+                mat.SetTexture("_RampMap", ramp);
+                ApplyRampLayout(mat, ramp);
+            }
+            mat.SetFloat("_ShadowSaturation", preset.shadowSaturation);
+            mat.SetFloat("_ShadowThreshold", preset.threshold);
+            mat.SetFloat("_ShadowSmoothness", preset.smoothness);
+            mat.SetFloat("_AmbientStrength", preset.ambient);
+            // Version decor : lisere coupe, mais ses reglages restent prets si on le reactive a la main
+            mat.SetFloat("_Rim", decor ? 0f : preset.rimMode);
+            if (preset.rimMode > 0)
+            {
+                mat.SetColor("_RimColor", preset.rimColor);
+                mat.SetFloat("_RimWidth", preset.rimWidth);
+                mat.SetFloat("_RimSoftness", preset.rimSoftness);
+                mat.SetFloat("_RimLightAlign", preset.rimAlign);
+                mat.SetFloat("_RimAlbedoTint", preset.rimTint);
+                mat.SetFloat("_RimDepthThreshold", preset.rimDepthThreshold);
+            }
+            // Le reflet est DESACTIVE par le prereglage : sur les grandes surfaces planes (murs, sol)
+            // il forme une grosse tache floue. On regle juste ses valeurs, a reactiver a la main
+            // sur les objets ronds / brillants (balles, metal, plastique...).
+            mat.SetFloat("_Specular", 0f);
+            mat.SetColor("_SpecularColor", preset.specularColor);
+            mat.SetFloat("_SpecularSize", preset.specularSize);
+            mat.SetFloat("_SpecularSoftness", preset.specularSoftness);
+            MaterialEditor.ApplyMaterialPropertyDrawers(mat);
+            EditorUtility.SetDirty(mat);
+        }
+        Undo.CollapseUndoOperations(undoGroup);
+        SceneView.RepaintAll();
     }
 
     private void DrawFloatSlider(List<Material> targets, Material reference, string property, string label, float min, float max)
@@ -180,12 +566,12 @@ public class ShaderToolsWindow : EditorWindow
         }
     }
 
-    private void DrawColor(List<Material> targets, Material reference, string property, string label)
+    private void DrawColor(List<Material> targets, Material reference, string property, string label, bool hdr = false)
     {
         if (!reference.HasProperty(property)) return;
         Color current = reference.GetColor(property);
         EditorGUI.BeginChangeCheck();
-        Color newValue = EditorGUILayout.ColorField(label, current);
+        Color newValue = EditorGUILayout.ColorField(new GUIContent(label), current, true, false, hdr);
         if (EditorGUI.EndChangeCheck())
         {
             foreach (var mat in targets)
@@ -210,9 +596,15 @@ public class ShaderToolsWindow : EditorWindow
         public bool selected;
         public bool isTransparent;
         public bool alreadyConverted;
+        // Textes prepares une seule fois au rescan, au lieu d'etre recalcules a chaque affichage
+        public string objectsLabel;
+        public string searchText;
     }
 
     private List<MaterialEntry> materialEntries = new List<MaterialEntry>();
+    private List<MaterialEntry> conversionView = new List<MaterialEntry>(); // lignes apres filtre
+    [SerializeField] private string conversionFilter = "";
+    private float conversionRowHeight = 60f;
     private Shader targetShader;
     private string materialsFolder = DefaultMaterialsFolder;
 
@@ -222,6 +614,9 @@ public class ShaderToolsWindow : EditorWindow
         {
             targetShader = Shader.Find(DefaultCelShader);
         }
+
+        // Les cases cochees survivent au rescan (qui peut maintenant arriver sans clic de l'utilisateur)
+        var previouslySelected = new HashSet<Material>(materialEntries.Where(e => e.selected).Select(e => e.material));
 
         materialEntries.Clear();
         var map = new Dictionary<Material, MaterialEntry>();
@@ -239,6 +634,7 @@ public class ShaderToolsWindow : EditorWindow
                     entry = new MaterialEntry { material = m };
                     entry.isTransparent = m.HasProperty("_Surface") && m.GetFloat("_Surface") > 0.5f;
                     entry.alreadyConverted = targetShader != null && m.shader == targetShader;
+                    entry.selected = previouslySelected.Contains(m) && !entry.isTransparent && !entry.alreadyConverted;
                     map[m] = entry;
                     materialEntries.Add(entry);
                 }
@@ -246,7 +642,56 @@ public class ShaderToolsWindow : EditorWindow
             }
         }
 
+        foreach (var entry in materialEntries)
+        {
+            var objNames = entry.renderers.Select(r => r.gameObject.name).Distinct().ToList();
+            entry.objectsLabel = string.Join(", ", objNames.Take(3));
+            if (objNames.Count > 3) entry.objectsLabel += " (+" + (objNames.Count - 3) + " autres)";
+            entry.searchText = (entry.material.name + " " + string.Join(" ", objNames)).ToLowerInvariant();
+        }
+
         materialEntries = materialEntries.OrderBy(e => e.material.name).ToList();
+    }
+
+    // Liste "virtualisee" : seules les lignes visibles sont dessinees, des espaces vides de meme hauteur
+    // remplacent les autres. IMGUI redessine tout a chaque rafraichissement : sans ca, une liste de
+    // plusieurs centaines de lignes rend la fenetre lente. Toutes les lignes doivent avoir la meme hauteur.
+    private int virtualFirst;
+    private int virtualLast;
+
+    private void DrawVirtualRows(int count, ref float rowHeight, System.Action<int> drawRow)
+    {
+        // Plage calculee pendant la passe Layout puis reutilisee par les autres passes de la meme image :
+        // sinon un coup de molette changerait les lignes dessinees entre deux passes (erreur GUILayout).
+        if (Event.current.type == EventType.Layout)
+        {
+            virtualFirst = Mathf.Clamp(Mathf.FloorToInt(scroll.y / rowHeight) - 1, 0, count);
+            virtualLast = Mathf.Min(count, virtualFirst + Mathf.CeilToInt(position.height / rowHeight) + 3);
+        }
+        int first = Mathf.Min(virtualFirst, count);
+        int last = Mathf.Min(virtualLast, count);
+
+        if (first > 0) GUILayout.Space(first * rowHeight);
+        float previousY = -1f;
+        float measured = -1f;
+        for (int i = first; i < last; i++)
+        {
+            drawRow(i);
+            if (Event.current.type == EventType.Repaint)
+            {
+                float y = GUILayoutUtility.GetLastRect().y;
+                if (previousY >= 0f) measured = y - previousY;
+                previousY = y;
+            }
+        }
+        if (last < count) GUILayout.Space((count - last) * rowHeight);
+
+        // Hauteur reelle d'une ligne (marges comprises) mesuree a l'affichage : corrige l'estimation de depart
+        if (measured > 1f && Mathf.Abs(measured - rowHeight) > 0.5f)
+        {
+            rowHeight = measured;
+            Repaint();
+        }
     }
 
     private void DrawConversionTab()
@@ -255,14 +700,26 @@ public class ShaderToolsWindow : EditorWindow
         EditorGUILayout.Space();
 
         EditorGUILayout.BeginHorizontal();
+        EditorGUI.BeginChangeCheck();
         targetShader = (Shader)EditorGUILayout.ObjectField("Shader cible", targetShader, typeof(Shader), false);
+        if (EditorGUI.EndChangeCheck())
+            sceneDataDirty = true; // le statut "deja converti" depend du shader cible
         if (GUILayout.Button("Rafraichir", GUILayout.Width(80)))
         {
-            RefreshMaterialList();
+            MarkSceneDataDirty();
         }
         EditorGUILayout.EndHorizontal();
 
         materialsFolder = EditorGUILayout.TextField("Dossier de sortie", materialsFolder);
+        conversionFilter = EditorGUILayout.TextField(new GUIContent("Filtrer", "Nom de material ou d'objet"), conversionFilter);
+
+        if (Event.current.type == EventType.Layout)
+        {
+            string filter = conversionFilter.Trim().ToLowerInvariant();
+            conversionView = filter.Length == 0
+                ? materialEntries
+                : materialEntries.Where(e => e.searchText.Contains(filter)).ToList();
+        }
 
         EditorGUILayout.Space();
 
@@ -273,17 +730,19 @@ public class ShaderToolsWindow : EditorWindow
         }
 
         EditorGUILayout.BeginHorizontal();
+        // Les deux boutons agissent sur les lignes affichees : filtrer puis "Tout selectionner" = selection ciblee
         if (GUILayout.Button("Tout selectionner (eligibles)"))
         {
-            foreach (var e in materialEntries)
+            foreach (var e in conversionView)
                 e.selected = !e.isTransparent && !e.alreadyConverted;
         }
         if (GUILayout.Button("Tout deselectionner"))
         {
-            foreach (var e in materialEntries)
+            foreach (var e in conversionView)
                 e.selected = false;
         }
         EditorGUILayout.EndHorizontal();
+        EditorGUILayout.LabelField(conversionView.Count + " / " + materialEntries.Count + " materials affiches", EditorStyles.miniLabel);
 
         EditorGUILayout.Space();
         scroll = EditorGUILayout.BeginScrollView(scroll);
@@ -293,7 +752,23 @@ public class ShaderToolsWindow : EditorWindow
 
         var richBoldLabel = new GUIStyle(EditorStyles.boldLabel) { richText = true };
 
-        foreach (var entry in materialEntries)
+        var rows = conversionView;
+        DrawVirtualRows(rows.Count, ref conversionRowHeight, i => DrawConversionRow(rows[i], selectedMats, richBoldLabel, previousBg));
+
+        EditorGUILayout.EndScrollView();
+
+        EditorGUILayout.Space();
+        int selectedCount = materialEntries.Count(e => e.selected);
+        EditorGUI.BeginDisabledGroup(selectedCount == 0 || targetShader == null);
+        if (GUILayout.Button("Convertir la selection (" + selectedCount + ")", GUILayout.Height(30)))
+        {
+            ConvertSelected();
+        }
+        EditorGUI.EndDisabledGroup();
+    }
+
+    private void DrawConversionRow(MaterialEntry entry, HashSet<Material> selectedMats, GUIStyle richBoldLabel, Color previousBg)
+    {
         {
             bool isHierarchySelected = selectedMats.Contains(entry.material);
             if (isHierarchySelected)
@@ -351,60 +826,24 @@ public class ShaderToolsWindow : EditorWindow
             if (isHierarchySelected) status += " - SELECTIONNE";
             EditorGUILayout.LabelField(entry.material.name + "  [ <color=" + statusColorHex + ">" + status + "</color> ]", richBoldLabel);
 
-            var objNames = entry.renderers.Where(r => r != null).Select(r => r.gameObject.name).Distinct().ToList();
-            string namesLabel = string.Join(", ", objNames.Take(3));
-            if (objNames.Count > 3) namesLabel += " (+" + (objNames.Count - 3) + " autres)";
-            EditorGUILayout.LabelField("Objets : " + namesLabel, EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Objets : " + entry.objectsLabel, EditorStyles.boldLabel);
             EditorGUILayout.LabelField("Shader actuel : " + (entry.material.shader != null ? entry.material.shader.name : "?"), EditorStyles.miniLabel);
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndHorizontal();
             EditorGUILayout.EndVertical();
         }
-
-        EditorGUILayout.EndScrollView();
-
-        EditorGUILayout.Space();
-        int selectedCount = materialEntries.Count(e => e.selected);
-        EditorGUI.BeginDisabledGroup(selectedCount == 0 || targetShader == null);
-        if (GUILayout.Button("Convertir la selection (" + selectedCount + ")", GUILayout.Height(30)))
-        {
-            ConvertSelected();
-        }
-        EditorGUI.EndDisabledGroup();
-    }
-
-    // Cree le dossier (et ses parents) s'il n'existe pas encore, pour que le package
-    // fonctionne directement dans un nouveau projet sans configuration prealable.
-    private bool EnsureFolderExists(string assetsPath)
-    {
-        if (AssetDatabase.IsValidFolder(assetsPath)) return true;
-        if (!assetsPath.StartsWith("Assets")) return false;
-
-        string[] parts = assetsPath.Split('/');
-        string current = parts[0];
-        for (int i = 1; i < parts.Length; i++)
-        {
-            string next = current + "/" + parts[i];
-            if (!AssetDatabase.IsValidFolder(next))
-            {
-                AssetDatabase.CreateFolder(current, parts[i]);
-            }
-            current = next;
-        }
-        return AssetDatabase.IsValidFolder(assetsPath);
     }
 
     private void ConvertSelected()
     {
-        if (!AssetDatabase.IsValidFolder(materialsFolder))
+        if (!materialsFolder.StartsWith("Assets"))
         {
-            if (!EnsureFolderExists(materialsFolder))
-            {
-                EditorUtility.DisplayDialog("Chemin invalide", "Impossible de creer le dossier '" + materialsFolder + "'. Verifie qu'il commence bien par 'Assets/'.", "OK");
-                return;
-            }
+            EditorUtility.DisplayDialog("Dossier invalide", "Le dossier de sortie doit etre dans Assets.", "OK");
+            return;
         }
+        // Premiere utilisation dans un projet : le dossier n'existe pas encore, on le cree
+        EnsureFolderExists(materialsFolder);
 
         var history = GetOrCreateHistory();
 
@@ -418,7 +857,9 @@ public class ShaderToolsWindow : EditorWindow
             if (!entry.selected || entry.isTransparent || entry.alreadyConverted) continue;
 
             Material original = entry.material;
-            string newMatPath = materialsFolder + "/M_Cel_" + original.name + ".mat";
+            // Prefixe propre au shader cible : sans ca, convertir vers un autre shader reutiliserait
+            // (et modifierait) les materials M_Cel_ deja utilises par d'autres scenes.
+            string newMatPath = materialsFolder + "/" + GetMaterialPrefix(targetShader) + StripToolPrefix(original.name) + ".mat";
 
             Material celMat = AssetDatabase.LoadAssetAtPath<Material>(newMatPath);
             bool isNewMaterial = celMat == null;
@@ -435,9 +876,27 @@ public class ShaderToolsWindow : EditorWindow
             }
 
             if (original.HasProperty("_BaseMap") && celMat.HasProperty("_BaseMap"))
+            {
                 celMat.SetTexture("_BaseMap", original.GetTexture("_BaseMap"));
+                // Tiling / offset aussi, sinon les motifs (tapis, sol quadrille...) changent d'echelle
+                celMat.SetTextureScale("_BaseMap", original.GetTextureScale("_BaseMap"));
+                celMat.SetTextureOffset("_BaseMap", original.GetTextureOffset("_BaseMap"));
+            }
             if (original.HasProperty("_BaseColor") && celMat.HasProperty("_BaseColor"))
                 celMat.SetColor("_BaseColor", original.GetColor("_BaseColor"));
+
+            // Un objet qui brillait (emission du Lit) continue de briller apres conversion
+            if (original.IsKeywordEnabled("_EMISSION") && celMat.HasProperty("_UseEmission"))
+            {
+                celMat.SetFloat("_UseEmission", 1f);
+                celMat.SetColor("_EmissionColor", original.GetColor("_EmissionColor"));
+                if (original.HasProperty("_EmissionMap"))
+                    celMat.SetTexture("_EmissionMap", original.GetTexture("_EmissionMap"));
+            }
+
+            // Synchronise les mots-cles avec les valeurs des [Toggle] / [KeywordEnum] du shader
+            if (isNewMaterial || celMat.HasProperty("_UseEmission"))
+                MaterialEditor.ApplyMaterialPropertyDrawers(celMat);
 
             EditorUtility.SetDirty(celMat);
 
@@ -471,8 +930,27 @@ public class ShaderToolsWindow : EditorWindow
 
         EditorUtility.DisplayDialog("Conversion terminee", converted + " material(s) converti(s) vers " + targetShader.name + ".\n\nCtrl+Z pour annuler dans l'immediat, ou l'onglet Historique plus tard (meme apres avoir rouvert le projet).", "OK");
 
-        RefreshMaterialList();
-        RefreshHistory();
+        MarkSceneDataDirty();
+    }
+
+    private static string GetMaterialPrefix(Shader shader)
+    {
+        // "M_Cel_" conserve pour le CelShading (compatibilite avec les materials deja crees)
+        if (shader.name == DefaultCelShader) return "M_Cel_";
+        string shortName = shader.name.Substring(shader.name.LastIndexOf('/') + 1);
+        return "M_" + shortName + "_";
+    }
+
+    // Reconvertir un material deja produit par l'outil (ex: M_Cel_Grey -> ToonAdvanced) donne
+    // M_ToonAdvanced_Grey plutot que M_ToonAdvanced_M_Cel_Grey.
+    private static string StripToolPrefix(string materialName)
+    {
+        foreach (var prefix in new[] { "M_Cel_", "M_ToonAdvanced_" })
+        {
+            if (materialName.StartsWith(prefix))
+                return materialName.Substring(prefix.Length);
+        }
+        return materialName;
     }
 
     // =====================================================================
@@ -490,6 +968,7 @@ public class ShaderToolsWindow : EditorWindow
     }
 
     private List<HistoryRow> historyRows = new List<HistoryRow>();
+    private float historyRowHeight = 44f;
 
     private MaterialConversionHistory GetOrCreateHistory()
     {
@@ -497,6 +976,7 @@ public class ShaderToolsWindow : EditorWindow
         if (history == null)
         {
             history = ScriptableObject.CreateInstance<MaterialConversionHistory>();
+            EnsureFolderExists(Path.GetDirectoryName(HistoryAssetPath).Replace('\\', '/'));
             AssetDatabase.CreateAsset(history, HistoryAssetPath);
             AssetDatabase.SaveAssets();
         }
@@ -588,7 +1068,8 @@ public class ShaderToolsWindow : EditorWindow
 
         if (GUILayout.Button("Rafraichir l'historique"))
         {
-            RefreshHistory();
+            historyDirty = true;
+            Repaint();
         }
 
         EditorGUILayout.Space();
@@ -619,7 +1100,41 @@ public class ShaderToolsWindow : EditorWindow
         var selectedRenderers = GetSelectedRenderers();
         Color previousBgHistory = GUI.backgroundColor;
 
-        foreach (var row in historyRows)
+        // Une entree par emplacement de material converti : apres une grosse scene, des milliers de lignes
+        DrawVirtualRows(historyRows.Count, ref historyRowHeight, i =>
+        {
+            if (DrawHistoryRow(historyRows[i], selectedRenderers, previousBgHistory))
+                toForget = historyRows[i];
+        });
+
+        EditorGUILayout.EndScrollView();
+
+        if (toForget != null)
+        {
+            var history = AssetDatabase.LoadAssetAtPath<MaterialConversionHistory>(HistoryAssetPath);
+            if (history != null)
+            {
+                history.entries.Remove(toForget.entry);
+                SaveHistory(history);
+            }
+            historyDirty = true;
+            Repaint();
+        }
+
+        EditorGUILayout.Space();
+        int selectedCount = historyRows.Count(r => r.selected);
+        EditorGUI.BeginDisabledGroup(selectedCount == 0);
+        if (GUILayout.Button("Revenir au material d'origine (" + selectedCount + ")", GUILayout.Height(30)))
+        {
+            RevertSelectedHistory();
+        }
+        EditorGUI.EndDisabledGroup();
+    }
+
+    // Retourne true si on a clique sur "Oublier"
+    private bool DrawHistoryRow(HistoryRow row, HashSet<Renderer> selectedRenderers, Color previousBgHistory)
+    {
+        bool forget = false;
         {
             bool isHierarchySelected = row.resolvedRenderer != null && selectedRenderers.Contains(row.resolvedRenderer);
             if (isHierarchySelected)
@@ -651,34 +1166,13 @@ public class ShaderToolsWindow : EditorWindow
 
             if (GUILayout.Button("Oublier", GUILayout.Width(60)))
             {
-                toForget = row;
+                forget = true;
             }
 
             EditorGUILayout.EndHorizontal();
             EditorGUILayout.EndVertical();
         }
-
-        EditorGUILayout.EndScrollView();
-
-        if (toForget != null)
-        {
-            var history = AssetDatabase.LoadAssetAtPath<MaterialConversionHistory>(HistoryAssetPath);
-            if (history != null)
-            {
-                history.entries.Remove(toForget.entry);
-                SaveHistory(history);
-            }
-            RefreshHistory();
-        }
-
-        EditorGUILayout.Space();
-        int selectedCount = historyRows.Count(r => r.selected);
-        EditorGUI.BeginDisabledGroup(selectedCount == 0);
-        if (GUILayout.Button("Revenir au material d'origine (" + selectedCount + ")", GUILayout.Height(30)))
-        {
-            RevertSelectedHistory();
-        }
-        EditorGUI.EndDisabledGroup();
+        return forget;
     }
 
     private void RevertSelectedHistory()
@@ -724,7 +1218,525 @@ public class ShaderToolsWindow : EditorWindow
 
         EditorUtility.DisplayDialog("Reversion terminee", reverted + " objet(s) revenu(s) a leur material d'origine.", "OK");
 
-        RefreshHistory();
-        RefreshMaterialList();
+        MarkSceneDataDirty();
+    }
+
+    // =====================================================================
+    // Onglet 4 : generateur de ramp (texture degrade lue par Custom/ToonAdvanced)
+    // Gauche = cote a l'ombre, droite = cote eclaire, milieu = limite ombre/lumiere.
+    // Le degrade est memorise dans le fichier importe : on peut recharger une ramp pour la retoucher.
+    // =====================================================================
+
+    [System.Serializable]
+    private class RampData
+    {
+        public Color[] colors;
+        public float[] times;
+        public bool hardEdges;
+    }
+
+    // [SerializeField] : survit aux recompilations, comme le reste de l'etat de la fenetre
+    [SerializeField] private Gradient rampGradient;
+    [SerializeField] private string rampName = "Ramp_Toon";
+    [SerializeField] private string rampFolder = DefaultRampFolder;
+    [SerializeField] private int rampWidth = 256;
+    [SerializeField] private bool rampHardEdges;
+    private Texture2D rampToLoad;
+
+    private static Gradient MakeGradient(Color[] colors, float[] times, bool hardEdges)
+    {
+        var g = new Gradient();
+        var colorKeys = new GradientColorKey[colors.Length];
+        for (int i = 0; i < colors.Length; i++)
+            colorKeys[i] = new GradientColorKey(colors[i], times[i]);
+        g.SetKeys(colorKeys, new[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(1f, 1f) });
+        // Fixed = pas de fondu entre les cles : chaque couleur s'arrete net a la position de sa cle
+        g.mode = hardEdges ? GradientMode.Fixed : GradientMode.Blend;
+        return g;
+    }
+
+    private void DrawRampTab()
+    {
+        if (rampGradient == null)
+            rampGradient = MakeGradient(ToonPresets[0].rampColors, ToonPresets[0].rampTimes, false);
+
+        EditorGUILayout.LabelField("Generateur de ramp (Custom/ToonAdvanced)", EditorStyles.boldLabel);
+        EditorGUILayout.HelpBox(
+            "Gauche = cote a l'ombre, droite = cote eclaire. Le milieu correspond au profil de l'objet " +
+            "(la limite ombre / lumiere). Plusieurs couleurs = plusieurs bandes d'ombre.",
+            MessageType.Info);
+
+        EditorGUI.BeginChangeCheck();
+        rampToLoad = (Texture2D)EditorGUILayout.ObjectField(new GUIContent("Retoucher", "Glisser une ramp ou un atlas cree par cet outil pour modifier ses degrades"), rampToLoad, typeof(Texture2D), false);
+        if (EditorGUI.EndChangeCheck() && rampToLoad != null)
+            LoadRamp(rampToLoad);
+
+        rampMode = GUILayout.Toolbar(rampMode, new[] { "Ramp simple", "Atlas jour / nuit" });
+        EditorGUILayout.Space();
+
+        if (rampMode == 0) DrawSingleRampSection();
+        else DrawRampAtlasSection();
+    }
+
+    private void DrawSingleRampSection()
+    {
+        EditorGUILayout.LabelField("Partir d'un modele", EditorStyles.miniBoldLabel);
+        EditorGUILayout.BeginHorizontal();
+        foreach (var preset in ToonPresets.Where(p => p.rampName != null))
+        {
+            if (GUILayout.Button(preset.label))
+            {
+                rampGradient = MakeGradient(preset.rampColors, preset.rampTimes, preset.rampHardEdges);
+                rampHardEdges = preset.rampHardEdges;
+                rampName = preset.rampName;
+            }
+        }
+        if (GUILayout.Button("3 bandes"))
+        {
+            rampGradient = MakeGradient(
+                new[] { new Color(0.5f, 0.48f, 0.72f), new Color(0.72f, 0.7f, 0.88f), Color.white },
+                new[] { 0.3f, 0.5f, 1f }, true);
+            rampHardEdges = true;
+            rampName = "Ramp_3Bandes";
+        }
+        EditorGUILayout.EndHorizontal();
+
+        EditorGUILayout.Space();
+        rampGradient = EditorGUILayout.GradientField("Degrade", rampGradient, GUILayout.Height(28));
+        EditorGUI.BeginChangeCheck();
+        rampHardEdges = EditorGUILayout.Toggle(new GUIContent("Bandes nettes", "Gradient en mode Fixed + texture en filtrage Point : transitions franches facon ZZZ."), rampHardEdges);
+        if (EditorGUI.EndChangeCheck())
+            rampGradient.mode = rampHardEdges ? GradientMode.Fixed : GradientMode.Blend;
+        rampWidth = EditorGUILayout.IntSlider("Largeur (pixels)", rampWidth, 16, 512);
+        rampName = EditorGUILayout.TextField("Nom", rampName);
+        rampFolder = EditorGUILayout.TextField("Dossier de sortie", rampFolder);
+
+        EditorGUILayout.Space();
+        string path = rampFolder + "/" + rampName + ".png";
+        bool exists = AssetDatabase.LoadAssetAtPath<Texture2D>(path) != null;
+        if (exists)
+            EditorGUILayout.HelpBox("'" + rampName + ".png' existe deja : il sera mis a jour (les materials qui l'utilisent aussi).", MessageType.None);
+
+        var toonMats = GetCompatibleMaterials().Where(m => m.shader.name == ShaderToon).ToList();
+
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button(exists ? "Mettre a jour la texture" : "Generer la texture", GUILayout.Height(28)))
+        {
+            var tex = SaveRampTexture(rampGradient, path, rampWidth, rampHardEdges);
+            EditorGUIUtility.PingObject(tex);
+        }
+        EditorGUI.BeginDisabledGroup(toonMats.Count == 0);
+        if (GUILayout.Button("Generer et appliquer a la selection (" + toonMats.Count + ")", GUILayout.Height(28)))
+        {
+            var tex = SaveRampTexture(rampGradient, path, rampWidth, rampHardEdges);
+            AssignRamp(toonMats, tex, "Appliquer la ramp " + rampName);
+        }
+        EditorGUI.EndDisabledGroup();
+        EditorGUILayout.EndHorizontal();
+    }
+
+    private static void AssignRamp(List<Material> mats, Texture2D tex, string undoName)
+    {
+        foreach (var mat in mats)
+        {
+            Undo.RecordObject(mat, undoName);
+            mat.SetTexture("_RampMap", tex);
+            mat.SetFloat("_UseRamp", 1f);
+            ApplyRampLayout(mat, tex);
+            MaterialEditor.ApplyMaterialPropertyDrawers(mat);
+            EditorUtility.SetDirty(mat);
+        }
+        SceneView.RepaintAll();
+    }
+
+    private void LoadRamp(Texture2D texture)
+    {
+        var importer = AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(texture)) as TextureImporter;
+        if (importer == null || string.IsNullOrEmpty(importer.userData))
+        {
+            EditorUtility.DisplayDialog("Ramp", "Cette texture n'a pas ete creee avec le generateur : impossible de retrouver son degrade.", "OK");
+            return;
+        }
+        rampFolder = Path.GetDirectoryName(AssetDatabase.GetAssetPath(texture)).Replace('\\', '/');
+        rampWidth = texture.width;
+
+        var atlas = ReadAtlasData(texture);
+        if (atlas != null)
+        {
+            atlasRows = new List<RampAtlasRow>();
+            for (int i = 0; i < atlas.names.Length; i++)
+            {
+                atlasRows.Add(new RampAtlasRow
+                {
+                    name = atlas.names[i],
+                    day = MakeGradient(atlas.day[i].colors, atlas.day[i].times, atlas.hardEdges),
+                    night = atlas.hasNight
+                        ? MakeGradient(atlas.night[i].colors, atlas.night[i].times, atlas.hardEdges)
+                        : MakeGradient(atlas.day[i].colors, atlas.day[i].times, atlas.hardEdges)
+                });
+            }
+            atlasHasNight = atlas.hasNight;
+            rampHardEdges = atlas.hardEdges;
+            atlasName = texture.name;
+            rampMode = 1;
+            return;
+        }
+
+        var data = JsonUtility.FromJson<RampData>(importer.userData);
+        rampGradient = MakeGradient(data.colors, data.times, data.hardEdges);
+        rampHardEdges = data.hardEdges;
+        rampName = texture.name;
+        rampMode = 0;
+    }
+
+    // =====================================================================
+    // Atlas de ramps : une ligne par type de matiere (decor, tissu, metal...), et en option
+    // une version "nuit" de chaque ligne. Le composant ToonDayNight de la scene fait la transition.
+    // Disposition : lignes de jour en haut, puis les lignes de nuit dans le meme ordre, 4 pixels par ligne.
+    // =====================================================================
+
+    [System.Serializable]
+    private class RampAtlasRow
+    {
+        public string name = "Ligne";
+        public Gradient day;
+        public Gradient night;
+    }
+
+    [System.Serializable]
+    private class RampAtlasData
+    {
+        public string[] names;
+        public RampData[] day;
+        public RampData[] night;
+        public bool hasNight;
+        public bool hardEdges;
+    }
+
+    [SerializeField] private int rampMode; // 0 = ramp simple, 1 = atlas
+    [SerializeField] private List<RampAtlasRow> atlasRows = new List<RampAtlasRow>();
+    [SerializeField] private bool atlasHasNight = true;
+    [SerializeField] private string atlasName = "RampAtlas";
+
+    private const int RampRowHeight = 4;
+    private static readonly Dictionary<Texture, RampAtlasData> atlasDataCache = new Dictionary<Texture, RampAtlasData>();
+
+    private static Gradient CopyGradient(Gradient g)
+    {
+        var copy = new Gradient();
+        copy.SetKeys(g.colorKeys, g.alphaKeys);
+        copy.mode = g.mode;
+        return copy;
+    }
+
+    private static RampAtlasRow DefaultAtlasRow(string name)
+    {
+        return new RampAtlasRow
+        {
+            name = name,
+            day = MakeGradient(new[] { new Color(0.6f, 0.62f, 0.82f), Color.white }, new[] { 0.5f, 1f }, true),
+            night = MakeGradient(new[] { new Color(0.25f, 0.28f, 0.5f), new Color(0.55f, 0.62f, 0.9f) }, new[] { 0.5f, 1f }, true)
+        };
+    }
+
+    private void DrawRampAtlasSection()
+    {
+        EditorGUILayout.HelpBox(
+            "Une ligne par type de matiere (decor, tissu, metal...). Chaque material choisit sa ligne dans l'onglet " +
+            "Reglages. Les lignes de nuit servent quand le composant ToonDayNight de la scene passe vers la nuit.",
+            MessageType.None);
+
+        if (atlasRows.Count == 0)
+            atlasRows.Add(DefaultAtlasRow("Decor"));
+
+        atlasHasNight = EditorGUILayout.Toggle(new GUIContent("Lignes de nuit", "Ajoute une version nuit de chaque ligne"), atlasHasNight);
+        EditorGUI.BeginChangeCheck();
+        rampHardEdges = EditorGUILayout.Toggle(new GUIContent("Bandes nettes", "Gradients en mode Fixed + filtrage Point"), rampHardEdges);
+        if (EditorGUI.EndChangeCheck())
+        {
+            foreach (var row in atlasRows)
+            {
+                row.day.mode = rampHardEdges ? GradientMode.Fixed : GradientMode.Blend;
+                row.night.mode = row.day.mode;
+            }
+        }
+
+        int toRemove = -1;
+        for (int i = 0; i < atlasRows.Count; i++)
+        {
+            var row = atlasRows[i];
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.BeginHorizontal();
+            row.name = EditorGUILayout.TextField("Ligne " + i, row.name);
+            EditorGUI.BeginDisabledGroup(atlasRows.Count <= 1);
+            if (GUILayout.Button(new GUIContent("X", "Supprimer la ligne"), GUILayout.Width(22)))
+                toRemove = i;
+            EditorGUI.EndDisabledGroup();
+            EditorGUILayout.EndHorizontal();
+            row.day = EditorGUILayout.GradientField("Jour", row.day);
+            if (atlasHasNight)
+                row.night = EditorGUILayout.GradientField("Nuit", row.night);
+            EditorGUILayout.EndVertical();
+        }
+        if (toRemove >= 0)
+            atlasRows.RemoveAt(toRemove);
+        if (GUILayout.Button("+ Ajouter une ligne"))
+        {
+            var last = atlasRows[atlasRows.Count - 1];
+            atlasRows.Add(new RampAtlasRow { name = "Ligne " + atlasRows.Count, day = CopyGradient(last.day), night = CopyGradient(last.night) });
+        }
+
+        EditorGUILayout.Space();
+        rampWidth = EditorGUILayout.IntSlider("Largeur (pixels)", rampWidth, 16, 512);
+        atlasName = EditorGUILayout.TextField("Nom", atlasName);
+        rampFolder = EditorGUILayout.TextField("Dossier de sortie", rampFolder);
+
+        string path = rampFolder + "/" + atlasName + ".png";
+        bool exists = AssetDatabase.LoadAssetAtPath<Texture2D>(path) != null;
+        var toonMats = GetCompatibleMaterials().Where(m => m.shader.name == ShaderToon).ToList();
+
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button(exists ? "Mettre a jour l'atlas" : "Generer l'atlas", GUILayout.Height(28)))
+        {
+            var tex = SaveRampAtlas(atlasRows, atlasHasNight, path, rampWidth, rampHardEdges);
+            EditorGUIUtility.PingObject(tex);
+        }
+        EditorGUI.BeginDisabledGroup(toonMats.Count == 0);
+        if (GUILayout.Button("Generer et appliquer a la selection (" + toonMats.Count + ")", GUILayout.Height(28)))
+        {
+            var tex = SaveRampAtlas(atlasRows, atlasHasNight, path, rampWidth, rampHardEdges);
+            AssignRamp(toonMats, tex, "Appliquer l'atlas " + atlasName);
+        }
+        EditorGUI.EndDisabledGroup();
+        EditorGUILayout.EndHorizontal();
+    }
+
+    private static RampData ToRampData(Gradient g, bool hardEdges)
+    {
+        return new RampData
+        {
+            colors = g.colorKeys.Select(k => k.color).ToArray(),
+            times = g.colorKeys.Select(k => k.time).ToArray(),
+            hardEdges = hardEdges
+        };
+    }
+
+    private static Texture2D SaveRampAtlas(List<RampAtlasRow> rows, bool hasNight, string assetPath, int width, bool hardEdges)
+    {
+        EnsureFolderExists(Path.GetDirectoryName(assetPath).Replace('\\', '/'));
+
+        int dayRows = rows.Count;
+        int totalRows = hasNight ? dayRows * 2 : dayRows;
+        int height = totalRows * RampRowHeight;
+        var tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
+        var pixels = new Color[width * height];
+        for (int r = 0; r < totalRows; r++)
+        {
+            Gradient g = r < dayRows ? rows[r].day : rows[r - dayRows].night;
+            // Ligne 0 en haut de l'image (en texture, y = 0 est en bas) : le shader lit v = 1 - (ligne + 0.5) / lignes
+            int yStart = (totalRows - 1 - r) * RampRowHeight;
+            for (int x = 0; x < width; x++)
+            {
+                Color c = g.Evaluate((x + 0.5f) / width);
+                for (int y = yStart; y < yStart + RampRowHeight; y++)
+                    pixels[y * width + x] = c;
+            }
+        }
+        tex.SetPixels(pixels);
+        tex.Apply();
+        File.WriteAllBytes(assetPath, tex.EncodeToPNG());
+        DestroyImmediate(tex);
+
+        var data = new RampAtlasData
+        {
+            names = rows.Select(r => r.name).ToArray(),
+            day = rows.Select(r => ToRampData(r.day, hardEdges)).ToArray(),
+            night = hasNight ? rows.Select(r => ToRampData(r.night, hardEdges)).ToArray() : new RampData[0],
+            hasNight = hasNight,
+            hardEdges = hardEdges
+        };
+        return ImportRampTexture(assetPath, hardEdges, JsonUtility.ToJson(data));
+    }
+
+    // Point d'entree scriptable : atlas a partir de lignes (nom + couleurs/positions de jour et de nuit)
+    public static Texture2D CreateRampAtlas(string assetPath, string[] names, Color[][] dayColors, float[][] dayTimes,
+        Color[][] nightColors, float[][] nightTimes, bool hardEdges, int width = 256)
+    {
+        var rows = new List<RampAtlasRow>();
+        bool hasNight = nightColors != null;
+        for (int i = 0; i < names.Length; i++)
+        {
+            rows.Add(new RampAtlasRow
+            {
+                name = names[i],
+                day = MakeGradient(dayColors[i], dayTimes[i], hardEdges),
+                night = hasNight ? MakeGradient(nightColors[i], nightTimes[i], hardEdges) : MakeGradient(dayColors[i], dayTimes[i], hardEdges)
+            });
+        }
+        return SaveRampAtlas(rows, hasNight, assetPath, width, hardEdges);
+    }
+
+    // Infos d'atlas memorisees dans le fichier importe (null pour une ramp simple ou une texture externe)
+    private static RampAtlasData ReadAtlasData(Texture texture)
+    {
+        if (texture == null) return null;
+        RampAtlasData data;
+        if (atlasDataCache.TryGetValue(texture, out data)) return data;
+
+        data = null;
+        var importer = AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(texture)) as TextureImporter;
+        if (importer != null && !string.IsNullOrEmpty(importer.userData) && importer.userData.Contains("\"names\""))
+        {
+            data = JsonUtility.FromJson<RampAtlasData>(importer.userData);
+            if (data.names == null || data.names.Length == 0) data = null;
+        }
+        atlasDataCache[texture] = data;
+        return data;
+    }
+
+    // Regle les infos de disposition lues par le shader selon la ramp assignee (simple ou atlas)
+    private static void ApplyRampLayout(Material mat, Texture ramp)
+    {
+        if (!mat.HasProperty("_RampRows")) return;
+        var atlas = ReadAtlasData(ramp);
+        int dayRows = atlas != null ? atlas.names.Length : 1;
+        bool night = atlas != null && atlas.hasNight;
+        mat.SetFloat("_RampRows", night ? dayRows * 2 : dayRows);
+        mat.SetFloat("_RampNightOffset", night ? dayRows : 0);
+        if (mat.GetFloat("_RampRow") > dayRows - 1)
+            mat.SetFloat("_RampRow", 0);
+    }
+
+    // Point d'entree scriptable : choisit la ligne d'atlas de ces materials
+    public static void SetRampRow(List<Material> mats, int row)
+    {
+        foreach (var mat in mats)
+        {
+            Undo.RecordObject(mat, "Ligne de l'atlas");
+            mat.SetFloat("_RampRow", row);
+            EditorUtility.SetDirty(mat);
+        }
+    }
+
+    public static void AssignRampToMaterials(List<Material> mats, Texture2D ramp)
+    {
+        AssignRamp(mats, ramp, "Appliquer la ramp " + ramp.name);
+    }
+
+    // Point d'entree scriptable : cree (ou ecrase) une ramp a partir de couleurs + positions (0..1)
+    public static Texture2D CreateRamp(string assetPath, Color[] colors, float[] times, bool hardEdges, int width = 256)
+    {
+        return SaveRampTexture(MakeGradient(colors, times, hardEdges), assetPath, width, hardEdges);
+    }
+
+    private static Texture2D SaveRampTexture(Gradient gradient, string assetPath, int width, bool hardEdges)
+    {
+        EnsureFolderExists(Path.GetDirectoryName(assetPath).Replace('\\', '/'));
+
+        // 4 pixels de haut : le shader lit la ligne du milieu, ca evite tout melange avec les bords
+        const int height = 4;
+        var tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
+        var pixels = new Color[width * height];
+        for (int x = 0; x < width; x++)
+        {
+            Color c = gradient.Evaluate((x + 0.5f) / width);
+            for (int y = 0; y < height; y++)
+                pixels[y * width + x] = c;
+        }
+        tex.SetPixels(pixels);
+        tex.Apply();
+        File.WriteAllBytes(assetPath, tex.EncodeToPNG());
+        DestroyImmediate(tex);
+
+        return ImportRampTexture(assetPath, hardEdges, JsonUtility.ToJson(ToRampData(gradient, hardEdges)));
+    }
+
+    // Reglages d'import communs aux ramps et aux atlas + degrade(s) memorise(s) dans le fichier
+    private static Texture2D ImportRampTexture(string assetPath, bool hardEdges, string userData)
+    {
+        AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+        var importer = (TextureImporter)AssetImporter.GetAtPath(assetPath);
+        importer.textureType = TextureImporterType.Default;
+        importer.sRGBTexture = true;
+        importer.mipmapEnabled = false;
+        importer.wrapMode = TextureWrapMode.Clamp;
+        importer.filterMode = hardEdges ? FilterMode.Point : FilterMode.Bilinear;
+        importer.textureCompression = TextureImporterCompression.Uncompressed;
+        importer.npotScale = TextureImporterNPOTScale.None;
+        importer.userData = userData;
+        importer.SaveAndReimport();
+
+        var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+        atlasDataCache.Remove(tex); // les infos d'atlas memorisees ont pu changer
+        return tex;
+    }
+
+    // =====================================================================
+    // MatCap metal par defaut : sphere "eclairee" en bandes franches (reflet du ciel en haut, du sol en bas)
+    // + un point de lumiere net. En gris : c'est la couleur de l'objet qui donne la teinte (jaune = or...).
+    // =====================================================================
+
+    private const string DefaultMatCapName = "MatCap_Metal_Toon";
+
+    public static Texture2D GetOrCreateDefaultMatCap(string assetPath)
+    {
+        var existing = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+        if (existing != null) return existing;
+        return CreateDefaultMatCap(assetPath);
+    }
+
+    // Ecrase le fichier s'il existe (le .meta est conserve : les materials gardent leur reference)
+    public static Texture2D CreateDefaultMatCap(string assetPath)
+    {
+        EnsureFolderExists(Path.GetDirectoryName(assetPath).Replace('\\', '/'));
+        const int size = 256;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var pixels = new Color[size * size];
+        for (int py = 0; py < size; py++)
+        {
+            for (int px = 0; px < size; px++)
+            {
+                // Point du disque -> normale de la sphere vue de face
+                float x = (px + 0.5f) / size * 2f - 1f;
+                float y = (py + 0.5f) / size * 2f - 1f;
+                float r = Mathf.Sqrt(x * x + y * y);
+                float ny = y; // la composante verticale de la normale suffit pour les bandes ciel / sol
+
+                // Trois bandes, avec une transition de 2 % pour eviter l'escalier de pixels.
+                // Gris 0.5 = couleur de l'objet inchangee : la bande "sol" (0.38) assombrit sans eteindre,
+                // pour que les faces planes tournees vers le bas restent lisibles.
+                float v = Mathf.Lerp(0.38f, 0.58f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.17f, -0.13f, ny)));
+                v = Mathf.Lerp(v, 0.95f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.43f, 0.47f, ny)));
+                // Point de lumiere net en haut a gauche
+                float spot = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.17f, 0.15f, Vector2.Distance(new Vector2(x, y), new Vector2(-0.4f, 0.5f))));
+                v = Mathf.Max(v, spot);
+                // Bord legerement assombri, et tout ce qui est hors du disque reprend la valeur du bord
+                v *= Mathf.Lerp(1f, 0.8f, Mathf.InverseLerp(0.9f, 1f, Mathf.Min(r, 1f)));
+                pixels[py * size + px] = new Color(v, v, v, 1f);
+            }
+        }
+        tex.SetPixels(pixels);
+        tex.Apply();
+        File.WriteAllBytes(assetPath, tex.EncodeToPNG());
+        DestroyImmediate(tex);
+
+        AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+        var importer = (TextureImporter)AssetImporter.GetAtPath(assetPath);
+        // Lineaire (pas sRGB) : c'est un multiplicateur, pas une couleur. En sRGB, le gris "neutre" 0.5
+        // deviendrait ~0.21 dans le shader et assombrirait tout l'objet.
+        importer.sRGBTexture = false;
+        importer.mipmapEnabled = false;
+        importer.wrapMode = TextureWrapMode.Clamp;
+        importer.textureCompression = TextureImporterCompression.Uncompressed;
+        importer.SaveAndReimport();
+        return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+    }
+
+    private static void EnsureFolderExists(string assetsPath)
+    {
+        if (AssetDatabase.IsValidFolder(assetsPath)) return;
+        string parent = Path.GetDirectoryName(assetsPath).Replace('\\', '/');
+        EnsureFolderExists(parent);
+        AssetDatabase.CreateFolder(parent, Path.GetFileName(assetsPath));
     }
 }
