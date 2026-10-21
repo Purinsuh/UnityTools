@@ -1,7 +1,9 @@
 {
     "name": "Mathis.UnityTools.Editor",
     "rootNamespace": "",
-    "references": [],
+    "references": [
+        "Mathis.UnityTools.Runtime"
+    ],
     "includePlatforms": [
         "Editor"
     ],

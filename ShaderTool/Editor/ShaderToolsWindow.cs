@@ -109,13 +109,103 @@ public class ShaderToolsWindow : EditorWindow
             }
         }
 
-        tab = GUILayout.Toolbar(tab, new[] { "Reglages", "Conversion", "Historique", "Ramp" });
+        tab = GUILayout.Toolbar(tab, new[] { "Reglages", "Conversion", "Historique", "Ramp", "Jour / Nuit" });
         EditorGUILayout.Space();
 
         if (tab == 0) DrawSettingsTab();
         else if (tab == 1) DrawConversionTab();
         else if (tab == 2) DrawHistoryTab();
-        else DrawRampTab();
+        else if (tab == 3) DrawRampTab();
+        else DrawDayNightTab();
+    }
+
+    // =====================================================================
+    // Onglet 5 : jour / nuit de la scene active (composant ToonDayNight)
+    // =====================================================================
+
+    private void DrawDayNightTab()
+    {
+        EditorGUILayout.LabelField("Jour / Nuit de la scene active", EditorStyles.boldLabel);
+        EditorGUILayout.HelpBox(
+            "Pilote en une fois les ramps de nuit des materials ToonAdvanced, le ciel ToonSky, la lumiere " +
+            "principale, l'ambiance et les reflets. Les couleurs de jour et de nuit se reglent sur le composant.",
+            MessageType.Info);
+        EditorGUILayout.Space();
+
+        var dayNight = FindFirstObjectByType<ToonDayNight>();
+        if (dayNight == null)
+        {
+            EditorGUILayout.HelpBox("Aucun composant ToonDayNight dans la scene.", MessageType.None);
+            if (GUILayout.Button("Ajouter le jour / nuit a la scene", GUILayout.Height(30)))
+                CreateDayNight();
+            return;
+        }
+
+        EditorGUI.BeginChangeCheck();
+        float night = EditorGUILayout.Slider("Nuit", dayNight.night, 0f, 1f);
+        if (EditorGUI.EndChangeCheck())
+            SetNight(dayNight, night);
+
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("Jour", GUILayout.Height(28))) SetNight(dayNight, 0f);
+        if (GUILayout.Button("Crepuscule", GUILayout.Height(28))) SetNight(dayNight, 0.5f);
+        if (GUILayout.Button("Nuit", GUILayout.Height(28))) SetNight(dayNight, 1f);
+        EditorGUILayout.EndHorizontal();
+
+        EditorGUILayout.Space();
+        if (GUILayout.Button("Selectionner le composant (couleurs, intensites...)"))
+        {
+            Selection.activeGameObject = dayNight.gameObject;
+            EditorGUIUtility.PingObject(dayNight);
+        }
+    }
+
+    private static void SetNight(ToonDayNight dayNight, float night)
+    {
+        // Le composant modifie aussi la lumiere et les reglages d'eclairage de la scene : on les inclut dans le Ctrl+Z
+        var light = new SerializedObject(dayNight).FindProperty("mainLight").objectReferenceValue as Light;
+        var undoTargets = new List<Object> { dayNight };
+        if (light != null) undoTargets.Add(light);
+        Undo.RecordObjects(undoTargets.ToArray(), "Jour / Nuit");
+        dayNight.night = night;
+        dayNight.Apply();
+        EditorUtility.SetDirty(dayNight);
+        if (light != null) EditorUtility.SetDirty(light);
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(dayNight.gameObject.scene);
+        SceneView.RepaintAll();
+    }
+
+    private static void CreateDayNight()
+    {
+        // Lumiere principale : le "Soleil" des reglages d'eclairage, sinon la premiere lumiere directionnelle
+        Light sun = RenderSettings.sun;
+        if (sun == null)
+            sun = FindObjectsByType<Light>(FindObjectsSortMode.None).FirstOrDefault(l => l.type == LightType.Directional);
+
+        // Releve de l'eclairage actuel AVANT d'ajouter le composant (il s'applique des son activation) :
+        // les valeurs de "jour" reprennent la scene telle quelle, donc l'ajouter ne change pas l'image.
+        // Ambiance : couleur moyenne des harmoniques spheriques (bande L0, en lineaire), valable quel que soit le mode.
+        var sh = RenderSettings.ambientProbe;
+        Color currentAmbient = new Color(sh[0, 0], sh[1, 0], sh[2, 0]).gamma;
+        float currentReflections = RenderSettings.reflectionIntensity;
+        Color sunColor = sun != null ? sun.color : Color.white;
+        float sunIntensity = sun != null ? sun.intensity : 1f;
+
+        var go = new GameObject("Jour_Nuit");
+        go.SetActive(false); // pas d'application avec les valeurs par defaut
+        var dayNight = go.AddComponent<ToonDayNight>();
+        var so = new SerializedObject(dayNight);
+        so.FindProperty("mainLight").objectReferenceValue = sun;
+        so.FindProperty("dayLightColor").colorValue = sunColor;
+        so.FindProperty("dayLightIntensity").floatValue = sunIntensity;
+        so.FindProperty("dayAmbient").colorValue = currentAmbient;
+        so.FindProperty("dayReflectionIntensity").floatValue = currentReflections;
+        so.ApplyModifiedPropertiesWithoutUndo();
+        go.SetActive(true);
+        Undo.RegisterCreatedObjectUndo(go, "Ajouter le jour / nuit");
+
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(go.scene);
+        Selection.activeGameObject = go;
     }
 
     // =====================================================================

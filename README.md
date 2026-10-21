@@ -19,12 +19,13 @@ Boite a outils personnelle de shaders stylises et d'outils d'editeur pour URP, p
 
 ### Outil d'editeur (`ShaderTool/Editor/`)
 
-**ShaderToolsWindow.cs** — Fenetre accessible via `Tools > Outils Shaders > Editeur`, avec 4 onglets :
+**ShaderToolsWindow.cs** — Fenetre accessible via `Tools > Outils Shaders > Editeur`, avec 5 onglets :
 
 1. **Reglages** — Ajuste en direct les materials ToonAdvanced (préréglages Doux / Contraste / Simple, version décor, ombres, ligne d'atlas, liseré, reflets, émissif) et `MangaDotsOutline*` des objets selectionnes dans la Hierarchy.
 2. **Conversion** — Liste tous les materials de la scene active, permet de les convertir en masse vers un shader cible (Cell Shading par defaut) tout en conservant couleur/texture d'origine. Cree les nouveaux materials dans `Assets/ShaderTools/Materials` (dossier cree automatiquement si absent, modifiable dans l'outil).
 3. **Historique** — Garde la trace persistante (survit a la fermeture d'Unity, contrairement a Ctrl+Z) du material d'origine de chaque objet converti, avec possibilite de revenir en arriere. Fonctionne aussi sur les prefabs.
 4. **Ramp** — Génère les textures de ramp (simple, ou atlas avec une ligne par matière et une version nuit) dans `Assets/ShaderTools/Ramps`. Une ramp créée par l'outil peut être rechargée pour être retouchée.
+5. **Jour / Nuit** — Ajoute le jour/nuit à la scène en un clic (en reprenant l'éclairage actuel), puis bascule entre Jour, Crépuscule et Nuit avec des boutons ou un curseur.
 
 La selection d'un objet dans la Hierarchy est surlignee en orange dans les deux onglets Conversion et Historique.
 
