@@ -29,6 +29,7 @@ Boite a outils personnelle de shaders stylises et d'outils d'editeur pour URP, p
 4. **Jour / Nuit** — Ajoute le jour/nuit à la scène en un clic (en reprenant l'éclairage actuel), puis bascule entre Jour, Crépuscule et Nuit avec des boutons ou un curseur.
 5. **Ramps** — Génère les textures de ramp (simple, ou atlas avec une ligne par matière et une version nuit) dans `Assets/ShaderTools/Ramps`. Une ramp créée par l'outil peut être rechargée pour être retouchée.
 6. **Historique** — Garde la trace persistante (survit à la fermeture d'Unity, contrairement à Ctrl+Z) du material d'origine de chaque objet converti, avec possibilité de revenir en arrière. Fonctionne aussi sur les prefabs.
+7. **Vérifier la scène** — Analyse en un clic ce qui s'affiche mal ou coûte cher (objets roses, scripts manquants, liseré ou contour inutiles, petites ombres, textures trop lourdes, lampes avec ombres, émissif qui ne brille pas, caméra sans anti-aliasing...), avec sélection des objets concernés et correction en un clic.
 
 La selection d'un objet dans la Hierarchy est surlignee en orange dans les deux onglets Conversion et Historique.
 

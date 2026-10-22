@@ -119,7 +119,8 @@ public class ShaderToolsWindow : EditorWindow
         if (help != ShowHelp) EditorPrefs.SetBool(HelpPrefKey, help);
         EditorGUILayout.EndHorizontal();
 
-        tab = GUILayout.Toolbar(tab, new[] { "1 Convertir", "2 Régler", "3 Atmosphère", "4 Jour / Nuit", "Ramps", "Historique" }, GUILayout.Height(24));
+        // Deux rangees : les 4 etapes du travail, puis les outils complementaires
+        tab = GUILayout.SelectionGrid(tab, new[] { "1 Convertir", "2 Régler", "3 Atmosphère", "4 Jour / Nuit", "Ramps", "Historique", "Vérifier la scène" }, 4, GUILayout.Height(46));
         EditorGUILayout.Space();
 
         if (tab == TabConvert) DrawConversionTab();
@@ -132,11 +133,12 @@ public class ShaderToolsWindow : EditorWindow
         }
         else if (tab == TabDayNight) DrawDayNightTab();
         else if (tab == TabRamp) DrawRampTab();
-        else DrawHistoryTab();
+        else if (tab == TabHistory) DrawHistoryTab();
+        else ToonSceneAudit.DrawTab(ShowHelp);
     }
 
     // Onglets dans l'ordre de travail
-    private const int TabConvert = 0, TabSettings = 1, TabAtmosphere = 2, TabDayNight = 3, TabRamp = 4, TabHistory = 5;
+    private const int TabConvert = 0, TabSettings = 1, TabAtmosphere = 2, TabDayNight = 3, TabRamp = 4, TabHistory = 5, TabAudit = 6;
 
     // =====================================================================
     // Onglet 5 : jour / nuit de la scene active (composant ToonDayNight)

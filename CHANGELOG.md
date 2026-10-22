@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+
+- Nouvel onglet **Vérifier la scène** : une analyse en un clic (quelques dizaines de ms) qui liste par gravité ce qui s'affiche mal ou coûte cher, avec « Voir » (sélectionne les objets) et, quand c'est possible, « Corriger » (annulable avec Ctrl+Z) :
+  - à corriger : objets roses (material manquant ou shader de l'ancien rendu), scripts manquants, atmosphère invisible (effet non installé) ;
+  - performances : liseré sur de grandes surfaces, contour des personnages sur du décor, petits objets qui projettent une ombre, textures de plus de 2048 px, trop de lampes avec ombres ;
+  - conseils : émissif sous le seuil du bloom, objets pas encore en toon, caméra sans anti-aliasing.
+- Les onglets sont maintenant sur deux rangées (les 4 étapes, puis Ramps, Historique et Vérifier la scène).
+
 ## 1.4.0
 
 - Nouvel onglet **Atmosphère** dans l'outil : ambiances prêtes à l'emploi (Extérieur jour clair, matin brumeux, coucher de soleil, nuit ; Intérieur chaleureux, frais et lumineux, mystérieux ; Aucune) posées en un clic pour **toute la scène** ou pour une **zone** (pièce, cave…) créée autour des objets sélectionnés. Unity fond les ambiances quand la caméra passe d'une zone à l'autre. Réglages modifiables dans l'outil.
