@@ -149,10 +149,13 @@ public static class ToonAtmosphereTools
     }
 
     // Bouton d'ambiance : pastille des couleurs du voile + nom, description en infobulle
+    private static GUIStyle presetButtonStyle; // cree une fois (la fenetre se redessine souvent)
+
     private static bool PresetButton(Preset p)
     {
-        var style = new GUIStyle(GUI.skin.button) { alignment = TextAnchor.MiddleLeft, padding = new RectOffset(30, 4, 2, 2) };
-        bool clicked = GUILayout.Button(new GUIContent(p.name, p.description), style, GUILayout.Height(26), GUILayout.MinWidth(120));
+        if (presetButtonStyle == null)
+            presetButtonStyle = new GUIStyle(GUI.skin.button) { alignment = TextAnchor.MiddleLeft, padding = new RectOffset(30, 4, 2, 2) };
+        bool clicked = GUILayout.Button(new GUIContent(p.name, p.description), presetButtonStyle, GUILayout.Height(26), GUILayout.MinWidth(120));
         if (Event.current.type == EventType.Repaint)
         {
             var r = GUILayoutUtility.GetLastRect();

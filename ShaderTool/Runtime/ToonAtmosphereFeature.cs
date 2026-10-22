@@ -15,7 +15,13 @@ public class ToonAtmosphereFeature : ScriptableRendererFeature
     public override void Create()
     {
 #if UNITY_EDITOR
-        if (shader == null) shader = Shader.Find("Hidden/Toon/Atmosphere");
+        // Effet ajouté à la main ("Add Renderer Feature") : le shader est retrouvé ET enregistré dans le renderer,
+        // sinon la référence n'existe qu'en mémoire et le jeu compilé n'aurait pas d'atmosphère.
+        if (shader == null)
+        {
+            shader = Shader.Find("Hidden/Toon/Atmosphere");
+            UnityEditor.EditorUtility.SetDirty(this);
+        }
 #endif
         pass = new AtmospherePass { renderPassEvent = RenderPassEvent.BeforeRenderingTransparents };
     }
@@ -24,12 +30,19 @@ public class ToonAtmosphereFeature : ScriptableRendererFeature
     {
         var cameraType = renderingData.cameraData.cameraType;
         if (cameraType == CameraType.Preview || cameraType == CameraType.Reflection || shader == null) return;
+        // Caméra superposée (interface, arme...) : l'image de la caméra de base a déjà son atmosphère, et la
+        // profondeur de la caméra superposée ne contient que ses propres objets (tout le reste serait pris pour du ciel)
+        if (renderingData.cameraData.renderType == CameraRenderType.Overlay) return;
         var settings = VolumeManager.instance.stack.GetComponent<ToonAtmosphere>();
         if (settings == null || !settings.IsActive()) return;
 
         if (material == null) material = CoreUtils.CreateEngineMaterial(shader);
         pass.Setup(material, settings);
         pass.ConfigureInput(ScriptableRenderPassInput.Depth);
+        // Demande la profondeur au niveau de la caméra aussi : avec un renderer en "Force Prepass", la seule demande
+        // de la passe ne suffit pas quand la texture de profondeur est désactivée dans l'asset URP (elle resterait
+        // vide et toute l'image serait prise pour du ciel).
+        renderingData.cameraData.requiresDepthTexture = true;
         pass.requiresIntermediateTexture = true;
         renderer.EnqueuePass(pass);
     }

@@ -13,6 +13,19 @@ Shader "Custom/ToonOutline"
     {
         Tags { "RenderType"="Opaque" "RenderPipeline"="UniversalPipeline" }
 
+        // Partage entre toutes les passes : meme CBUFFER partout = compatible SRP Batcher.
+        HLSLINCLUDE
+        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+        CBUFFER_START(UnityPerMaterial)
+            float4 _BaseColor;
+            float4 _ShadowColor;
+            float _ShadowThreshold;
+            float4 _OutlineColor;
+            float _OutlineWidth;
+        CBUFFER_END
+        ENDHLSL
+
         // ---- Outline Pass (inverted hull) ----
         Pass
         {
@@ -24,12 +37,6 @@ Shader "Custom/ToonOutline"
             HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-
-            CBUFFER_START(UnityPerMaterial)
-                float4 _OutlineColor;
-                float _OutlineWidth;
-            CBUFFER_END
 
             struct Attributes
             {
@@ -67,14 +74,7 @@ Shader "Custom/ToonOutline"
             HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
-
-            CBUFFER_START(UnityPerMaterial)
-                float4 _BaseColor;
-                float4 _ShadowColor;
-                float _ShadowThreshold;
-            CBUFFER_END
 
             struct Attributes
             {
@@ -104,6 +104,51 @@ Shader "Custom/ToonOutline"
                 half4 col = lerp(_ShadowColor, _BaseColor, lightStep);
                 return col;
             }
+            ENDHLSL
+        }
+
+        // ---- Ombre portee, profondeur, profondeur + normales (ToonSimplePasses.hlsl) ----
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode"="ShadowCaster" }
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+
+            HLSLPROGRAM
+            #pragma vertex SimpleShadowVert
+            #pragma fragment SimpleShadowFrag
+            #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
+            #define TOON_SIMPLE_SHADOW_CASTER
+            #include "ToonSimplePasses.hlsl"
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "DepthOnly"
+            Tags { "LightMode"="DepthOnly" }
+            ZWrite On
+            ColorMask R
+
+            HLSLPROGRAM
+            #pragma vertex SimpleDepthVert
+            #pragma fragment SimpleDepthFrag
+            #include "ToonSimplePasses.hlsl"
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "DepthNormals"
+            Tags { "LightMode"="DepthNormals" }
+            ZWrite On
+
+            HLSLPROGRAM
+            #pragma vertex SimpleDepthVert
+            #pragma fragment SimpleDepthNormalsFrag
+            #include "ToonSimplePasses.hlsl"
             ENDHLSL
         }
     }

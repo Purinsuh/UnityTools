@@ -132,7 +132,13 @@ public class ShaderToolsWindow : EditorWindow
             EditorGUILayout.EndScrollView();
         }
         else if (tab == TabDayNight) DrawDayNightTab();
-        else if (tab == TabRamp) DrawRampTab();
+        else if (tab == TabRamp)
+        {
+            // Un atlas avec beaucoup de lignes depasse la hauteur de la fenetre
+            scroll = EditorGUILayout.BeginScrollView(scroll);
+            DrawRampTab();
+            EditorGUILayout.EndScrollView();
+        }
         else if (tab == TabHistory) DrawHistoryTab();
         else ToonSceneAudit.DrawTab(ShowHelp);
     }
@@ -729,7 +735,13 @@ public class ShaderToolsWindow : EditorWindow
         var pixels = readable.GetPixels();
         DestroyImmediate(readable);
 
-        var warm = pixels.Where(c => c.r > 0.75f && c.r - c.b > 0.08f && c.r - c.b < 0.35f).ToList();
+        // Teinte de reference : un pixel sur 16 suffit (une texture 4096 en a 16 millions a trier sinon)
+        var warm = new List<Color>();
+        for (int i = 0; i < pixels.Length; i += 16)
+        {
+            var c = pixels[i];
+            if (c.r > 0.75f && c.r - c.b > 0.08f && c.r - c.b < 0.35f) warm.Add(c);
+        }
         if (warm.Count == 0)
         {
             EditorUtility.DisplayDialog("Masque peau", "Aucune couleur de peau trouvee dans '" + source.name + "'.", "OK");
@@ -825,6 +837,13 @@ public class ShaderToolsWindow : EditorWindow
     public static Material GetOrCreateNoOutlineVariant(Material mat)
     {
         string matPath = AssetDatabase.GetAssetPath(mat);
+        // Material cree par script (pas de fichier) ou range dans un package (lecture seule) : pas de variante possible
+        if (string.IsNullOrEmpty(matPath) || !matPath.StartsWith("Assets"))
+        {
+            EditorUtility.DisplayDialog("Couper le contour", "Le material '" + mat.name + "' n'est pas un fichier du dossier Assets : " +
+                "enregistre-le d'abord dans le projet (ou convertis-le).", "OK");
+            return null;
+        }
         // Material range dans un modele (.fbx, .glb) : la variante va dans le dossier du modele
         string folder = Path.GetDirectoryName(matPath).Replace('\\', '/');
         string path = folder + "/" + mat.name + NoOutlineSuffix + ".mat";
@@ -1118,7 +1137,9 @@ public class ShaderToolsWindow : EditorWindow
         public Material material;
         public List<Renderer> renderers = new List<Renderer>();
         public bool selected;
-        public bool isTransparent;
+        // Raison pour laquelle ce material n'est pas converti (transparent, decoupe...), null s'il peut l'etre
+        public string ignoreReason;
+        public bool Ignored => ignoreReason != null;
         public bool alreadyConverted;
         // Textes prepares une seule fois au rescan, au lieu d'etre recalcules a chaque affichage
         public string objectsLabel;
@@ -1156,9 +1177,8 @@ public class ShaderToolsWindow : EditorWindow
                 if (!map.TryGetValue(m, out entry))
                 {
                     entry = new MaterialEntry { material = m };
-                    entry.isTransparent = m.HasProperty("_Surface") && m.GetFloat("_Surface") > 0.5f;
+                    entry.ignoreReason = GetIgnoreReason(m);
                     entry.alreadyConverted = targetShader != null && m.shader == targetShader;
-                    entry.selected = previouslySelected.Contains(m) && !entry.isTransparent && !entry.alreadyConverted;
                     map[m] = entry;
                     materialEntries.Add(entry);
                 }
@@ -1168,6 +1188,11 @@ public class ShaderToolsWindow : EditorWindow
 
         foreach (var entry in materialEntries)
         {
+            // Particules, sprites, traits, texte... : ToonAdvanced est fait pour des maillages
+            if (entry.ignoreReason == null && entry.renderers.Any(r => !(r is MeshRenderer || r is SkinnedMeshRenderer)))
+                entry.ignoreReason = "Particules / sprite / texte";
+            entry.selected = previouslySelected.Contains(entry.material) && !entry.Ignored && !entry.alreadyConverted;
+
             var objNames = entry.renderers.Select(r => r.gameObject.name).Distinct().ToList();
             entry.objectsLabel = string.Join(", ", objNames.Take(3));
             if (objNames.Count > 3) entry.objectsLabel += " (+" + (objNames.Count - 3) + " autres)";
@@ -1175,6 +1200,19 @@ public class ShaderToolsWindow : EditorWindow
         }
 
         materialEntries = materialEntries.OrderBy(e => e.material.name).ToList();
+    }
+
+    // ToonAdvanced est opaque et sans decoupe : un material transparent ou decoupe (feuillage, grillage, meches)
+    // deviendrait un bloc plein. Couvre URP (_Surface, _AlphaClip), Built-in (_Mode) et la file de rendu.
+    private static string GetIgnoreReason(Material m)
+    {
+        bool transparent = (m.HasProperty("_Surface") && m.GetFloat("_Surface") > 0.5f)
+            || (m.HasProperty("_Mode") && m.GetFloat("_Mode") >= 2f) || m.renderQueue > 2500;
+        if (transparent) return "Transparent";
+        bool cutout = (m.HasProperty("_AlphaClip") && m.GetFloat("_AlphaClip") > 0.5f) || m.IsKeywordEnabled("_ALPHATEST_ON")
+            || (m.HasProperty("_Mode") && Mathf.Approximately(m.GetFloat("_Mode"), 1f)) || m.renderQueue >= 2450;
+        if (cutout) return "Decoupe (alpha)";
+        return null;
     }
 
     // Liste "virtualisee" : seules les lignes visibles sont dessinees, des espaces vides de meme hauteur
@@ -1261,7 +1299,7 @@ public class ShaderToolsWindow : EditorWindow
         if (GUILayout.Button("Tout selectionner (eligibles)"))
         {
             foreach (var e in conversionView)
-                e.selected = !e.isTransparent && !e.alreadyConverted;
+                e.selected = !e.Ignored && !e.alreadyConverted;
         }
         if (GUILayout.Button("Tout deselectionner"))
         {
@@ -1310,14 +1348,14 @@ public class ShaderToolsWindow : EditorWindow
 
             EditorGUILayout.BeginHorizontal();
 
-            EditorGUI.BeginDisabledGroup(entry.isTransparent || entry.alreadyConverted);
+            EditorGUI.BeginDisabledGroup(entry.Ignored || entry.alreadyConverted);
             entry.selected = EditorGUILayout.Toggle(entry.selected, GUILayout.Width(20));
             EditorGUI.EndDisabledGroup();
 
             // Pastille de statut : couleur pleine dessinee directement (pas de multiplication
             // avec une texture sombre), donc le vert "deja converti" reste un vrai vert net.
             Color statusDotColor = entry.alreadyConverted ? new Color(0.35f, 0.85f, 0.35f)
-                : entry.isTransparent ? new Color(0.55f, 0.55f, 0.55f)
+                : entry.Ignored ? new Color(0.55f, 0.55f, 0.55f)
                 : new Color(0.4f, 0.65f, 0.95f);
             var dotRect = GUILayoutUtility.GetRect(10, 10, GUILayout.Width(10), GUILayout.Height(10));
             EditorGUI.DrawRect(dotRect, statusDotColor);
@@ -1345,9 +1383,9 @@ public class ShaderToolsWindow : EditorWindow
             EditorGUILayout.BeginVertical();
 
             string statusColorHex = entry.alreadyConverted ? "#5FD068"
-                : entry.isTransparent ? "#9E9E9E"
+                : entry.Ignored ? "#9E9E9E"
                 : "#64B5F6";
-            string status = entry.isTransparent ? "Transparent - ignore"
+            string status = entry.Ignored ? entry.ignoreReason + " - ignore"
                 : entry.alreadyConverted ? "Deja converti"
                 : "Pret a convertir";
             if (isHierarchySelected) status += " - SELECTIONNE";
@@ -1381,7 +1419,7 @@ public class ShaderToolsWindow : EditorWindow
 
         foreach (var entry in materialEntries)
         {
-            if (!entry.selected || entry.isTransparent || entry.alreadyConverted) continue;
+            if (!entry.selected || entry.Ignored || entry.alreadyConverted) continue;
 
             Material original = entry.material;
             // Prefixe propre au shader cible : sans ca, convertir vers un autre shader reutiliserait

@@ -13,6 +13,22 @@ Shader "Custom/CelShading"
     {
         Tags { "RenderType"="Opaque" "RenderPipeline"="UniversalPipeline" }
 
+        // Partage entre toutes les passes : meme CBUFFER partout = compatible SRP Batcher.
+        HLSLINCLUDE
+        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+        TEXTURE2D(_BaseMap);
+        SAMPLER(sampler_BaseMap);
+
+        CBUFFER_START(UnityPerMaterial)
+            float4 _BaseMap_ST;
+            float4 _BaseColor;
+            float4 _ShadowColor;
+            float _ShadowThreshold;
+            float _ShadowSmoothness;
+        CBUFFER_END
+        ENDHLSL
+
         // ---- Forward pass: cell-shaded lighting, receives real shadows from the main directional light ----
         Pass
         {
@@ -26,19 +42,7 @@ Shader "Custom/CelShading"
             #pragma multi_compile_fragment _ _MAIN_LIGHT_SHADOWS_CASCADE
             #pragma multi_compile_fragment _ _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile_fragment _ _SHADOWS_SOFT
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
-
-            TEXTURE2D(_BaseMap);
-            SAMPLER(sampler_BaseMap);
-
-            CBUFFER_START(UnityPerMaterial)
-                float4 _BaseMap_ST;
-                float4 _BaseColor;
-                float4 _ShadowColor;
-                float _ShadowThreshold;
-                float _ShadowSmoothness;
-            CBUFFER_END
 
             struct Attributes
             {
@@ -84,7 +88,7 @@ Shader "Custom/CelShading"
             ENDHLSL
         }
 
-        // ---- ShadowCaster pass: lets this object cast shadows onto others (ground, characters, etc.) ----
+        // ---- Ombre portee, profondeur, profondeur + normales (ToonSimplePasses.hlsl) ----
         Pass
         {
             Name "ShadowCaster"
@@ -94,50 +98,38 @@ Shader "Custom/CelShading"
             ColorMask 0
 
             HLSLPROGRAM
-            #pragma vertex vert
-            #pragma fragment frag
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #pragma vertex SimpleShadowVert
+            #pragma fragment SimpleShadowFrag
+            #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
+            #define TOON_SIMPLE_SHADOW_CASTER
+            #include "ToonSimplePasses.hlsl"
+            ENDHLSL
+        }
 
-            float3 _LightDirection;
+        Pass
+        {
+            Name "DepthOnly"
+            Tags { "LightMode"="DepthOnly" }
+            ZWrite On
+            ColorMask R
 
-            struct Attributes
-            {
-                float4 positionOS : POSITION;
-                float3 normalOS : NORMAL;
-            };
+            HLSLPROGRAM
+            #pragma vertex SimpleDepthVert
+            #pragma fragment SimpleDepthFrag
+            #include "ToonSimplePasses.hlsl"
+            ENDHLSL
+        }
 
-            struct Varyings
-            {
-                float4 positionCS : SV_POSITION;
-            };
+        Pass
+        {
+            Name "DepthNormals"
+            Tags { "LightMode"="DepthNormals" }
+            ZWrite On
 
-            Varyings vert(Attributes IN)
-            {
-                Varyings OUT;
-                float3 positionWS = TransformObjectToWorld(IN.positionOS.xyz);
-                float3 normalWS = TransformObjectToWorldNormal(IN.normalOS);
-
-                // Bias manuel (au lieu de la fonction utilitaire ApplyShadowBias, dont le nom/emplacement
-                // exact varie selon les versions d'URP) : decale legerement le sommet le long de la normale,
-                // plus fort quand la surface est presque perpendiculaire a la lumiere, pour eviter l'acne d'ombre.
-                float3 lightDirWS = normalize(_LightDirection);
-                float NdotL = saturate(dot(normalWS, lightDirWS));
-                float normalBias = lerp(0.01, 0.001, NdotL);
-                positionWS += normalWS * normalBias;
-
-                OUT.positionCS = TransformWorldToHClip(positionWS);
-                #if UNITY_REVERSED_Z
-                    OUT.positionCS.z = min(OUT.positionCS.z, OUT.positionCS.w * UNITY_NEAR_CLIP_VALUE);
-                #else
-                    OUT.positionCS.z = max(OUT.positionCS.z, OUT.positionCS.w * UNITY_NEAR_CLIP_VALUE);
-                #endif
-                return OUT;
-            }
-
-            half4 frag(Varyings IN) : SV_Target
-            {
-                return 0;
-            }
+            HLSLPROGRAM
+            #pragma vertex SimpleDepthVert
+            #pragma fragment SimpleDepthNormalsFrag
+            #include "ToonSimplePasses.hlsl"
             ENDHLSL
         }
     }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.1
+
+Relecture complète de l'outil, corrections :
+
+- **Atmosphère** : quand l'option « Depth Texture » est coupée dans les réglages URP (cas par défaut de beaucoup de projets) et que la caméra suit ces réglages (vue Scene comprise), l'effet ne recevait pas la profondeur et voilait toute l'image comme si c'était du ciel. L'effet demande maintenant la profondeur lui-même.
+- **Atmosphère** : ignorée sur les caméras superposées (Overlay : interface, arme...), qui l'auraient appliquée une seconde fois sur toute l'image.
+- **Atmosphère** : l'effet ajouté à la main au renderer (« Add Renderer Feature ») enregistre bien son shader ; avant, il n'existait qu'en mémoire et le jeu compilé n'avait pas d'atmosphère.
+- **CelShading, ToonOutline, MangaDotsOutline(Textured)** : ajout des passes de profondeur (ces objets manquaient dans la texture de profondeur : atmosphère, liseré Depth et SSAO les ignoraient) et d'ombre portée (ToonOutline et MangaDots ne projetaient pas d'ombre). Passes communes dans `ToonSimplePasses.hlsl`. Leurs réglages sont maintenant partagés entre toutes les passes : ces shaders redeviennent compatibles avec le SRP Batcher. Le rendu de leur couleur ne change pas.
+- **Conversion** : les materials découpés (alpha clip : feuillage, grillage...), transparents de l'ancien rendu, particules, sprites et texte ne sont plus proposés (ils seraient devenus des blocs pleins) ; la raison est affichée.
+- **Vérifier la scène** : nouvelles vérifications « Liseré ou contour sans profondeur » (sans elle, le liseré Depth s'allume sur tout l'objet) et « Passe de contour inutile » (materials créés par script). Les objets roses des particules sont détectés, les vitres et feuillages ne sont plus signalés comme « pas en toon », les caméras superposées ne sont plus signalées pour l'anti-aliasing, les textures des packages ne sont plus proposées à la réduction, les scripts manquants des prefabs sont laissés (avec un message) au lieu de faire une erreur.
+- **Contour** : « Couper sur les objets sélectionnés » prévient au lieu d'échouer quand le material n'est pas un fichier du projet.
+- Onglet **Ramps** avec barre de défilement (atlas à beaucoup de lignes) ; masque peau plus rapide sur les grandes textures.
+
 ## 1.5.0
 
 - Nouvel onglet **Vérifier la scène** : une analyse en un clic (quelques dizaines de ms) qui liste par gravité ce qui s'affiche mal ou coûte cher, avec « Voir » (sélectionne les objets) et, quand c'est possible, « Corriger » (annulable avec Ctrl+Z) :

@@ -124,6 +124,8 @@ public static class ToonSceneAudit
         CheckUnconvertedMaterials(renderers);
         CheckCameraAntialiasing();
         CheckAtmosphereInstalled();
+        CheckDepthTexture(renderers);
+        CheckIdleOutlinePass(renderers);
 
         issues.RemoveAll(i => i.objects.Count == 0 && i.fix == null);
     }
@@ -163,7 +165,7 @@ public static class ToonSceneAudit
         };
         foreach (var r in renderers)
         {
-            if (r is ParticleSystemRenderer) continue;
+            // Particules comprises : leurs shaders Built-in (Particles/Standard...) sont roses aussi
             bool pink = r.sharedMaterials.Any(m => m == null || m.shader == null || !m.shader.isSupported
                 || m.shader.name == "Hidden/InternalErrorShader" || BuiltInShaderPrefixes.Any(p => m.shader.name.StartsWith(p)));
             if (pink) issue.objects.Add(r.gameObject);
@@ -183,16 +185,22 @@ public static class ToonSceneAudit
         {
             severity = Severity.Error,
             title = "Scripts manquants",
-            explanation = "Ces objets portent un composant dont le script n'existe plus (supprimé ou renommé). Il ne fait plus rien et peut gêner les prefabs.",
+            explanation = "Ces objets portent un composant dont le script n'existe plus (supprimé ou renommé). Il ne fait plus rien et peut gêner les prefabs. " +
+                          "Sur une instance de prefab, le script manquant est dans le prefab lui-même : il faut l'ouvrir pour le retirer.",
             objects = gos.Cast<Object>().ToList(),
             fixLabel = "Retirer les scripts manquants",
             fix = () =>
             {
+                int skipped = 0;
                 foreach (var go in gos)
                 {
+                    // Unity refuse de retirer un composant qui vient du prefab : seul le prefab peut le faire
+                    if (PrefabUtility.IsPartOfPrefabInstance(go)) { skipped++; continue; }
                     Undo.RegisterCompleteObjectUndo(go, "Retirer les scripts manquants");
                     GameObjectUtility.RemoveMonoBehavioursWithMissingScript(go);
                 }
+                if (skipped > 0)
+                    Debug.LogWarning("Vérifier la scène : " + skipped + " objet(s) de prefab gardent leur script manquant : ouvre le prefab pour le retirer.");
             }
         };
         Add(issue);
@@ -283,7 +291,9 @@ public static class ToonSceneAudit
                 foreach (int id in m.GetTexturePropertyNameIDs())
                 {
                     if (!(m.GetTexture(id) is Texture2D tex) || Mathf.Max(tex.width, tex.height) <= MaxTextureSize) continue;
-                    if (!(AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(tex)) is TextureImporter)) continue;
+                    // Seulement les textures du projet (celles des packages sont en lecture seule)
+                    string texPath = AssetDatabase.GetAssetPath(tex);
+                    if (!texPath.StartsWith("Assets/") || !(AssetImporter.GetAtPath(texPath) is TextureImporter)) continue;
                     if (!heavy.TryGetValue(tex, out var users)) heavy[tex] = users = new List<Object>();
                     if (!users.Contains(r.gameObject)) users.Add(r.gameObject);
                 }
@@ -295,7 +305,8 @@ public static class ToonSceneAudit
             title = "Textures très lourdes",
             explanation = heavy.Count + " texture(s) dépassent " + MaxTextureSize + " px (" + string.Join(", ", heavy.Keys.Take(4).Select(t => t.name + " " + t.width + "×" + t.height)) +
                           (heavy.Count > 4 ? "..." : "") + "). Les limiter à " + MaxTextureSize + " px divise leur poids en mémoire par 4, " +
-                          "la différence ne se voit pas en toon. Le fichier d'origine n'est pas modifié.",
+                          "la différence ne se voit pas en toon. Le fichier d'origine n'est pas modifié. " +
+                          "Attention : ce réglage d'import ne s'annule pas avec Ctrl+Z (remettre « Max Size » dans l'import de la texture).",
             objects = heavy.Values.SelectMany(v => v).Distinct().ToList(),
             fixLabel = "Limiter à " + MaxTextureSize + " px",
             fix = () =>
@@ -347,9 +358,11 @@ public static class ToonSceneAudit
     // Objets encore en Lit / autre shader URP : pas le style toon
     private static void CheckUnconvertedMaterials(List<Renderer> renderers)
     {
-        var gos = renderers.Where(r => !(r is ParticleSystemRenderer) && r.sharedMaterials.Any(m => m != null && m.shader != null && m.shader.isSupported
-            && !ToolShaders.Contains(m.shader.name) && !m.shader.name.StartsWith("Hidden/") && !m.shader.name.StartsWith("Skybox/")
-            && !BuiltInShaderPrefixes.Any(p => m.shader.name.StartsWith(p)))).Select(r => (Object)r.gameObject).ToList();
+        // Seulement les maillages opaques : particules, sprites, texte, vitres et feuillages découpés gardent leur shader
+        var gos = renderers.Where(r => (r is MeshRenderer || r is SkinnedMeshRenderer) && r.sharedMaterials.Any(m => m != null && m.shader != null && m.shader.isSupported
+            && m.renderQueue < 2450 && !ToolShaders.Contains(m.shader.name) && !m.shader.name.StartsWith("Hidden/") && !m.shader.name.StartsWith("Skybox/")
+            && !m.shader.name.StartsWith("TextMeshPro") && !BuiltInShaderPrefixes.Any(p => m.shader.name.StartsWith(p))))
+            .Select(r => (Object)r.gameObject).ToList();
         Add(new Issue
         {
             severity = Severity.Advice,
@@ -362,7 +375,8 @@ public static class ToonSceneAudit
     private static void CheckCameraAntialiasing()
     {
         var cams = Object.FindObjectsByType<Camera>(FindObjectsSortMode.None)
-            .Where(c => c.cameraType == CameraType.Game && c.TryGetComponent<UniversalAdditionalCameraData>(out var d) && d.antialiasing == AntialiasingMode.None).ToList();
+            .Where(c => c.cameraType == CameraType.Game && c.TryGetComponent<UniversalAdditionalCameraData>(out var d)
+                && d.renderType == CameraRenderType.Base && d.antialiasing == AntialiasingMode.None).ToList(); // une caméra superposée suit sa caméra de base
         Add(new Issue
         {
             severity = Severity.Advice,
@@ -383,19 +397,87 @@ public static class ToonSceneAudit
         });
     }
 
+    // Le liseré Depth et la silhouette claire des contours lisent la texture de profondeur de la caméra. Sans elle
+    // (option « Depth Texture » de l'asset URP coupée), le liseré s'allume partout et le contour des vêtements disparaît.
+    private static void CheckDepthTexture(List<Renderer> renderers)
+    {
+        var users = renderers.Where(r => r.sharedMaterials.Any(m => IsToon(m) && (m.GetFloat("_Rim") > 1.5f
+            || (m.HasProperty("_Outline") && m.GetFloat("_Outline") > 0.5f && m.GetFloat("_OutlineOuterFade") > 0f))))
+            .Select(r => (Object)r.gameObject).ToList();
+        if (users.Count == 0) return;
+        var assets = GetPipelineAssets().Where(a => !a.supportsCameraDepthTexture).ToList();
+        if (assets.Count == 0) return;
+        Add(new Issue
+        {
+            severity = Severity.Error,
+            title = "Liseré ou contour sans profondeur",
+            explanation = "Ces objets utilisent le liseré « Depth » ou la silhouette claire des contours, qui lisent la profondeur de l'image. " +
+                          "L'option « Depth Texture » est coupée dans les réglages URP (" + string.Join(", ", assets.Select(a => a.name)) + ") : " +
+                          "dans la vue Scene et avec les caméras qui suivent ces réglages, le liseré s'allume partout. La corriger active cette option (coût faible).",
+            objects = users,
+            fixLabel = "Activer la profondeur",
+            fix = () =>
+            {
+                foreach (var a in assets)
+                {
+                    Undo.RecordObject(a, "Activer la texture de profondeur");
+                    a.supportsCameraDepthTexture = true;
+                    EditorUtility.SetDirty(a);
+                }
+            }
+        });
+    }
+
+    // Materials créés par un script avec ToonAdvanced : contour coupé mais passe de contour restée active
+    // (l'objet est dessiné une fois de plus pour rien). L'outil et l'Inspector, eux, coupent la passe.
+    private static void CheckIdleOutlinePass(List<Renderer> renderers)
+    {
+        var mats = new HashSet<Material>(renderers.SelectMany(r => r.sharedMaterials)
+            .Where(m => IsToon(m) && m.HasProperty("_Outline") && m.GetFloat("_Outline") < 0.5f && m.GetShaderPassEnabled(ToonOutlineDrawer.PassLightMode)));
+        Add(new Issue
+        {
+            severity = Severity.Performance,
+            title = "Passe de contour inutile",
+            explanation = "Le contour de ces materials est coupé, mais sa passe est restée active (material créé par un script) : " +
+                          "chaque objet est dessiné une fois de plus, sans rien afficher.",
+            objects = renderers.Where(r => r.sharedMaterials.Any(mats.Contains)).Select(r => (Object)r.gameObject).ToList(),
+            fixLabel = "Couper la passe",
+            fix = () =>
+            {
+                foreach (var m in mats)
+                {
+                    Undo.RecordObject(m, "Couper la passe de contour");
+                    m.SetShaderPassEnabled(ToonOutlineDrawer.PassLightMode, false);
+                    EditorUtility.SetDirty(m);
+                }
+            }
+        });
+    }
+
+    private static IEnumerable<UniversalRenderPipelineAsset> GetPipelineAssets()
+    {
+        var assets = new List<UniversalRenderPipelineAsset>();
+        if (GraphicsSettings.defaultRenderPipeline is UniversalRenderPipelineAsset main) assets.Add(main);
+        for (int i = 0; i < QualitySettings.count; i++)
+            if (QualitySettings.GetRenderPipelineAssetAt(i) is UniversalRenderPipelineAsset q && !assets.Contains(q)) assets.Add(q);
+        return assets;
+    }
+
     // Ambiances posées mais effet absent du rendu : le voile ne s'affiche pas
     private static void CheckAtmosphereInstalled()
     {
         var volumes = Object.FindObjectsByType<Volume>(FindObjectsSortMode.None)
             .Where(v => v.sharedProfile != null && v.sharedProfile.TryGet(out ToonAtmosphere a) && a.intensity.value > 0f).ToList();
         if (volumes.Count == 0) return;
-        var urp = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
-        if (urp == null) return;
-        var list = new SerializedObject(urp).FindProperty("m_RendererDataList");
+        // Tous les assets URP (un par niveau de qualité possible), comme le bouton d'installation
         bool missing = false;
-        for (int i = 0; i < list.arraySize; i++)
-            if (list.GetArrayElementAtIndex(i).objectReferenceValue is ScriptableRendererData data && !data.rendererFeatures.Any(f => f is ToonAtmosphereFeature))
-                missing = true;
+        foreach (var urp in GetPipelineAssets())
+        {
+            var list = new SerializedObject(urp).FindProperty("m_RendererDataList");
+            for (int i = 0; i < list.arraySize; i++)
+                if (list.GetArrayElementAtIndex(i).objectReferenceValue is ScriptableRendererData data && !data.rendererFeatures.Any(f => f is ToonAtmosphereFeature))
+                    missing = true;
+        }
         if (!missing) return;
         Add(new Issue
         {
