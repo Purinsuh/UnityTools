@@ -70,6 +70,7 @@ Shader "Custom/ToonAdvanced"
         [HideInInspector] _OutlineZone ("Partie", Float) = 0
         [NoScaleOffset] _OutlineSkinMask ("Masque peau (blanc = peau)", 2D) = "black" {}
         _OutlineSkinColor ("Couleur sur la peau (masque)", Color) = (0.8,0.55,0.5,1)
+        _OutlineSkinWidth ("Largeur sur la peau (masque)", Range(0,8)) = 2
         _OutlineOuterFade ("Silhouette exterieure plus claire", Range(0,1)) = 0
 
         [Header(Rendu)]
@@ -127,6 +128,7 @@ Shader "Custom/ToonAdvanced"
             half _OutlineDistance;
             half _OutlineZOffset;
             half4 _OutlineSkinColor;
+            half _OutlineSkinWidth;
             half _OutlineOuterFade;
         CBUFFER_END
 
@@ -444,6 +446,9 @@ Shader "Custom/ToonAdvanced"
             #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
 
+            // Echantillonneur propre au vertex shader (celui de _BaseMap n'existe que dans le fragment shader)
+            SAMPLER(sampler_outline_linear_repeat);
+
             struct Attributes
             {
                 float4 positionOS : POSITION;
@@ -490,14 +495,18 @@ Shader "Custom/ToonAdvanced"
 
                 // Largeur en pixels (reference 1080p) exacte a _OutlineDistance : plus pres le trait grossit (x2 max,
                 // gros plans), plus loin il s'affine comme un vrai trait sur l'objet.
-                float pixels = _OutlineWidth * (_ScreenParams.y / 1080.0) * min(2.0, _OutlineDistance / max(positionCS.w, 0.001));
+                // Materiau peau + vetements : la peau a sa propre largeur, lue dans le masque au sommet
+                float2 uv = TRANSFORM_TEX(IN.uv, _BaseMap);
+                half skin = SAMPLE_TEXTURE2D_LOD(_OutlineSkinMask, sampler_outline_linear_repeat, uv, 0).r;
+                half width = lerp(_OutlineWidth, _OutlineSkinWidth, skin);
+                float pixels = width * (_ScreenParams.y / 1080.0) * min(2.0, _OutlineDistance / max(positionCS.w, 0.001));
                 float2 dirPx = normalCS.xy * _ScreenParams.xy;
                 dirPx *= rsqrt(max(dot(dirPx, dirPx), 1e-8));
                 positionCS.xy += dirPx * (pixels * 2.0 / _ScreenParams.xy) * positionCS.w;
 
                 // Garde-fou si la passe n'a pas ete coupee alors que le contour est desactive : rien n'est trace
                 OUT.positionCS = _Outline > 0.5 ? positionCS : float4(2.0, 2.0, 2.0, 1.0);
-                OUT.uv = TRANSFORM_TEX(IN.uv, _BaseMap);
+                OUT.uv = uv;
                 OUT.fogFactor = ComputeFogFactor(positionCS.z);
                 return OUT;
             }
