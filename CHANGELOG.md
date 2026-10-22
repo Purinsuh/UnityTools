@@ -8,6 +8,7 @@
 - Contour : **masque peau** créé automatiquement par l'outil (détection de la couleur de peau dans la texture, PNG retouchable) pour les materials qui mélangent peau et vêtements.
 - Contour : **silhouette extérieure plus claire**, traits intérieurs (plis, couches) bien marqués, comme dans Genshin.
 - Contour : bouton **« Couper sur les objets sélectionnés »** (yeux, reflets…) : l'objet reçoit une variante du material sans contour, qui suit tous les autres réglages.
+- Contour : de loin, sous 1 pixel, le trait s'estompe au lieu de se casser en pointillés (alpha to coverage, profite du MSAA).
 - ToonAdvanced : en « deux faces » (Cull Off), l'intérieur est maintenant éclairé de son côté.
 - À la première ouverture du projet, la passe de contour est coupée sur les materiaux ToonAdvanced existants.
 

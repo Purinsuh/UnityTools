@@ -436,6 +436,7 @@ Shader "Custom/ToonAdvanced"
             Tags { "LightMode"="SRPDefaultUnlit" }
             Cull Front
             ZWrite On
+            AlphaToMask On
 
             HLSLPROGRAM
             #pragma target 3.0
@@ -465,6 +466,7 @@ Shader "Custom/ToonAdvanced"
                 float4 positionCS : SV_POSITION;
                 float2 uv : TEXCOORD0;
                 half fogFactor : TEXCOORD1;
+                half coverage : TEXCOORD2;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
                 UNITY_VERTEX_OUTPUT_STEREO
             };
@@ -500,6 +502,10 @@ Shader "Custom/ToonAdvanced"
                 half skin = SAMPLE_TEXTURE2D_LOD(_OutlineSkinMask, sampler_outline_linear_repeat, uv, 0).r;
                 half width = lerp(_OutlineWidth, _OutlineSkinWidth, skin);
                 float pixels = width * (_ScreenParams.y / 1080.0) * min(2.0, _OutlineDistance / max(positionCS.w, 0.001));
+                // Sous 1 pixel, le trait se casserait en pointilles : il garde 1 pixel et s'estompe a la place
+                // (alpha to coverage : le MSAA ne remplit qu'une partie des echantillons du pixel)
+                OUT.coverage = saturate(pixels);
+                pixels = max(pixels, 1.0);
                 float2 dirPx = normalCS.xy * _ScreenParams.xy;
                 dirPx *= rsqrt(max(dot(dirPx, dirPx), 1e-8));
                 positionCS.xy += dirPx * (pixels * 2.0 / _ScreenParams.xy) * positionCS.w;
@@ -535,7 +541,7 @@ Shader "Custom/ToonAdvanced"
                 // Suit un peu la lumiere principale (plus sombre et bleute la nuit)
                 color *= lerp(1.0h, min(_MainLightColor.rgb, 1.0h), 0.5h);
                 color = MixFog(color, IN.fogFactor);
-                return half4(color, 1.0h);
+                return half4(color, IN.coverage);
             }
             ENDHLSL
         }
