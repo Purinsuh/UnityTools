@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.2
+
+- **Contour** : la liste « Partie de chaque material » est lisible même dans une fenêtre étroite. Chaque ligne montre une vignette de la texture, un nom court (les morceaux communs à tous les materials sont retirés, le nom de la texture est préféré : `Hair`, `Body`, `Dress`...) et le choix de la partie sur toute la largeur. Le nom complet et la texture s'affichent au survol.
+- **Contour** : survoler une ligne de la liste, ou le bloc de réglages d'une partie (Cheveux, Peau, Vêtements), **allume en surbrillance** les morceaux concernés dans la vue Scene (en clair devant, en léger derrière les autres objets). Simple dessin d'éditeur : rien n'est ajouté à la scène ni au jeu.
+
 ## 1.5.1
 
 Relecture complète de l'outil, corrections :

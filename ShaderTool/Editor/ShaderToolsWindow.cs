@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEditor;
+using UnityEngine.Rendering;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -40,6 +41,9 @@ public class ShaderToolsWindow : EditorWindow
         Selection.selectionChanged += OnSelectionChanged;
         EditorApplication.hierarchyChanged += OnHierarchyChanged;
         ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
+        SceneView.duringSceneGui += OnSceneGUI;
+        // Le survol des lignes de la liste des parties allume les objets dans la vue Scene
+        wantsMouseMove = true;
         if (targetShader == null)
             targetShader = Shader.Find(DefaultTargetShader);
         MarkSceneDataDirty();
@@ -50,6 +54,8 @@ public class ShaderToolsWindow : EditorWindow
         Selection.selectionChanged -= OnSelectionChanged;
         EditorApplication.hierarchyChanged -= OnHierarchyChanged;
         ObjectChangeEvents.changesPublished -= OnObjectChangesPublished;
+        SceneView.duringSceneGui -= OnSceneGUI;
+        SetHighlight(null);
     }
 
     private void OnSelectionChanged()
@@ -96,6 +102,12 @@ public class ShaderToolsWindow : EditorWindow
 
     private void OnGUI()
     {
+        // Surbrillance : la souris bouge -> on redessine pour savoir quelle ligne est survolee ;
+        // elle sort de la fenetre -> plus rien d'allume. Les lignes survolees sont relevees pendant la passe Repaint.
+        if (Event.current.type == EventType.MouseMove) Repaint();
+        if (Event.current.type == EventType.MouseLeaveWindow) SetHighlight(null);
+        if (Event.current.type == EventType.Repaint) hoveredMaterials = null;
+
         // Recalculs uniquement pendant la passe Layout : les donnees ne changent pas entre la passe
         // Layout et la passe Repaint d'une meme image (sinon erreur "Invalid GUILayout state").
         if (Event.current.type == EventType.Layout)
@@ -141,6 +153,9 @@ public class ShaderToolsWindow : EditorWindow
         }
         else if (tab == TabHistory) DrawHistoryTab();
         else ToonSceneAudit.DrawTab(ShowHelp);
+
+        if (Event.current.type == EventType.Repaint)
+            SetHighlight(hoveredMaterials);
     }
 
     // Onglets dans l'ordre de travail
@@ -595,15 +610,26 @@ public class ShaderToolsWindow : EditorWindow
     // Une ligne par material pour choisir sa partie, puis les reglages de chaque partie
     private void DrawOutlineZones(List<Material> mats)
     {
-        EditorGUILayout.LabelField("Partie de chaque material", EditorStyles.miniBoldLabel);
+        EditorGUILayout.LabelField("Partie de chaque material (survoler une ligne l'allume dans la vue Scene)", EditorStyles.miniBoldLabel);
         var labels = OutlineZones.Select(z => z.label).ToArray();
-        foreach (var mat in mats)
+        // Une ligne par material : vignette de sa texture, nom court (sans le debut commun a tous), et sa partie
+        var shortNames = GetShortNames(mats);
+        for (int i = 0; i < mats.Count; i++)
         {
+            var mat = mats[i];
+            var baseMap = mat.HasProperty("_BaseMap") ? mat.GetTexture("_BaseMap") : null;
+            var row = EditorGUILayout.BeginHorizontal();
+            DrawMaterialThumbnail(GUILayoutUtility.GetRect(32, 32, GUILayout.Width(32), GUILayout.Height(32)), mat, baseMap);
+            EditorGUILayout.BeginVertical();
+            EditorGUILayout.LabelField(new GUIContent(shortNames[i], mat.name + (baseMap != null ? "\nTexture : " + baseMap.name : "")), EditorStyles.boldLabel);
             int zone = GetOutlineZone(mat);
             EditorGUI.BeginChangeCheck();
-            zone = EditorGUILayout.Popup(mat.name, zone, labels);
+            zone = EditorGUILayout.Popup(zone, labels);
             if (EditorGUI.EndChangeCheck())
                 SetOutlineZone(mat, zone, mats);
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.EndHorizontal();
+            TrackHover(row, mat);
         }
 
         // Peau : materials "Peau" + la partie peau (masque) des materials "Peau + vetements"
@@ -641,6 +667,8 @@ public class ShaderToolsWindow : EditorWindow
     private void DrawZoneSettings(string label, List<Material> main, List<Material> skinOfMixed)
     {
         if (main.Count == 0 && skinOfMixed.Count == 0) return;
+        // Survoler le bloc d'une partie allume tous ses materials dans la vue Scene
+        var block = EditorGUILayout.BeginVertical();
         EditorGUILayout.LabelField(label, EditorStyles.miniBoldLabel);
         EditorGUI.indentLevel++;
         DrawZoneValue(main, "_OutlineColor", skinOfMixed, "_OutlineSkinColor", label, "Couleur", true, 0f, 0f);
@@ -651,6 +679,131 @@ public class ShaderToolsWindow : EditorWindow
             DrawZoneValue(main, "_OutlineOuterFade", null, null, label, "Silhouette exterieure plus claire", false, 0f, 1f);
         }
         EditorGUI.indentLevel--;
+        EditorGUILayout.EndVertical();
+        foreach (var mat in main.Concat(skinOfMixed))
+            TrackHover(block, mat);
+    }
+
+    // =====================================================================
+    // Liste des parties : noms courts, vignettes, et surbrillance dans la vue Scene des materials survoles
+    // (dessin d'editeur uniquement : rien n'est ajoute a la scene ni au jeu)
+    // =====================================================================
+
+    // Noms courts : le nom de la texture est souvent le plus parlant ("..._Hair_Diffuse"), sinon celui du material.
+    // Les morceaux communs a toute la liste, au debut et a la fin, sont retires ("Avatar_..._Tex_", "_Diffuse").
+    public static List<string> GetShortNames(List<Material> mats)
+    {
+        if (mats.Count == 1) return new List<string> { StripToolPrefix(mats[0].name) };
+        var texNames = mats.Select(m => m.HasProperty("_BaseMap") && m.GetTexture("_BaseMap") != null ? m.GetTexture("_BaseMap").name : null).ToList();
+        var texShort = StripCommonParts(texNames.Select(n => n ?? "").ToList());
+        var matShort = StripCommonParts(mats.Select(m => StripToolPrefix(m.name)).ToList());
+        var names = new List<string>();
+        for (int i = 0; i < mats.Count; i++)
+        {
+            // Texture partagee par deux materials (ex. corps et ruban) : son nom ne les distingue pas
+            bool textureNameUnique = texNames[i] != null && !texShort.Where((t, j) => j != i && texNames[j] != null).Contains(texShort[i]);
+            string name = textureNameUnique ? texShort[i] : matShort[i];
+            names.Add(string.IsNullOrEmpty(name) ? mats[i].name : name);
+        }
+        return names;
+    }
+
+    // Retire les morceaux (separes par "_" ou un espace) communs au debut et a la fin de tous les noms,
+    // en gardant au moins un morceau a chacun
+    private static List<string> StripCommonParts(List<string> names)
+    {
+        var parts = names.Select(n => n.Split('_', ' ')).ToList();
+        int minLength = parts.Min(p => p.Length);
+        int start = 0;
+        while (start < minLength - 1 && parts.All(p => p[start] == parts[0][start])) start++;
+        int end = 0;
+        while (end < minLength - 1 - start && parts.All(p => p[p.Length - 1 - end] == parts[0][parts[0].Length - 1 - end])) end++;
+        return parts.Select(p => string.Join("_", p.Skip(start).Take(p.Length - start - end))).ToList();
+    }
+
+    private void DrawMaterialThumbnail(Rect rect, Material mat, Texture baseMap)
+    {
+        // Un seul rectangle reserve, dessin immediat dedans : l'apercu peut arriver entre deux passes sans casser la mise en page
+        var preview = baseMap != null ? AssetPreview.GetAssetPreview(baseMap) : AssetPreview.GetAssetPreview(mat);
+        if (preview == null && AssetPreview.IsLoadingAssetPreviews()) Repaint();
+        if (preview != null) GUI.DrawTexture(rect, preview, ScaleMode.ScaleToFit);
+        else if (mat.HasProperty("_BaseColor")) EditorGUI.DrawRect(rect, mat.GetColor("_BaseColor"));
+    }
+
+    private HashSet<Material> hoveredMaterials;
+    private static HashSet<Material> highlighted;
+    private static Material highlightVisible, highlightHidden;
+    private static Mesh bakedMesh;
+
+    // Pendant la passe Repaint, la zone survolee par la souris ajoute son material a la surbrillance
+    private void TrackHover(Rect area, Material mat)
+    {
+        if (Event.current.type != EventType.Repaint || !area.Contains(Event.current.mousePosition)) return;
+        if (hoveredMaterials == null) hoveredMaterials = new HashSet<Material>();
+        hoveredMaterials.Add(mat);
+    }
+
+    private static void SetHighlight(HashSet<Material> mats)
+    {
+        bool wasEmpty = highlighted == null || highlighted.Count == 0, isEmpty = mats == null || mats.Count == 0;
+        if (wasEmpty && isEmpty) return;
+        if (!wasEmpty && !isEmpty && highlighted.SetEquals(mats)) return;
+        highlighted = isEmpty ? null : mats;
+        SceneView.RepaintAll();
+    }
+
+    private static Material CreateHighlightMaterial(Color color, CompareFunction zTest)
+    {
+        // Shader des Handles d'Unity : couleur unie, melange, test de profondeur reglables
+        var mat = new Material(Shader.Find("Hidden/Internal-Colored")) { hideFlags = HideFlags.HideAndDontSave };
+        mat.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+        mat.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
+        mat.SetInt("_Cull", (int)CullMode.Off);
+        mat.SetInt("_ZWrite", 0);
+        mat.SetInt("_ZTest", (int)zTest);
+        mat.SetFloat("_ZBias", -1f); // juste devant la surface, sans scintillement
+        mat.SetColor("_Color", color);
+        return mat;
+    }
+
+    private void OnSceneGUI(SceneView view)
+    {
+        if (highlighted == null || Event.current.type != EventType.Repaint) return;
+        if (highlightVisible == null) highlightVisible = CreateHighlightMaterial(new Color(0.2f, 0.9f, 1f, 0.55f), CompareFunction.LessEqual);
+        // Parties cachees derriere d'autres objets (dessous d'une jupe, oeil sous un voile) : plus discretes
+        if (highlightHidden == null) highlightHidden = CreateHighlightMaterial(new Color(0.2f, 0.9f, 1f, 0.15f), CompareFunction.Greater);
+
+        foreach (var r in GetSelectedRenderers())
+        {
+            if (r == null || !r.enabled || !r.gameObject.activeInHierarchy) continue;
+            var shared = r.sharedMaterials;
+            if (!shared.Any(m => m != null && highlighted.Contains(m))) continue;
+
+            Mesh mesh;
+            if (r is SkinnedMeshRenderer skinned)
+            {
+                // Maillage anime : sa pose actuelle. Avec useScale, la pose cuite se place avec la transformation
+                // complete de l'objet (echelle comprise : modeles importes en centimetres, echelle 100...)
+                if (skinned.sharedMesh == null) continue;
+                if (bakedMesh == null) bakedMesh = new Mesh { hideFlags = HideFlags.HideAndDontSave };
+                skinned.BakeMesh(bakedMesh, true);
+                mesh = bakedMesh;
+            }
+            else if (r.TryGetComponent<MeshFilter>(out var filter) && filter.sharedMesh != null)
+                mesh = filter.sharedMesh;
+            else continue;
+            Matrix4x4 matrix = r.transform.localToWorldMatrix;
+
+            // Seulement les sous-maillages qui utilisent ce material (ex. les cheveux dans le maillage du corps)
+            for (int i = 0; i < shared.Length && i < mesh.subMeshCount; i++)
+            {
+                if (shared[i] == null || !highlighted.Contains(shared[i])) continue;
+                highlightHidden.SetPass(0);
+                Graphics.DrawMeshNow(mesh, matrix, i);
+                highlightVisible.SetPass(0);
+                Graphics.DrawMeshNow(mesh, matrix, i);
+            }
+        }
     }
 
     private void DrawZoneValue(List<Material> main, string mainProperty, List<Material> secondary, string secondaryProperty,
