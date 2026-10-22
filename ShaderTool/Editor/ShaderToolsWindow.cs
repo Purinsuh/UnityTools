@@ -463,31 +463,297 @@ public class ShaderToolsWindow : EditorWindow
             DrawTexture(mats, reference, "_EmissionMap", "Masque (blanc = brille)");
         }
 
-        if (!reference.HasProperty("_Outline")) return;
+        DrawOutlineSettings(mats);
+    }
+
+    // =====================================================================
+    // Contour des personnages : une "partie" par material (cheveux, peau, vetements) avec sa couleur,
+    // masque peau pour les materials qui melangent peau et vetements, objets sans contour (yeux...).
+    // =====================================================================
+
+    private const string NoOutlineSuffix = "_SansContour";
+
+    private struct OutlineZone
+    {
+        public string label;
+        public Color color;
+        public float outerFade;
+    }
+
+    // Index = valeur de _OutlineZone (0 = personnalise : l'outil ne change rien)
+    private static readonly OutlineZone[] OutlineZones =
+    {
+        new OutlineZone { label = "Personnalise" },
+        new OutlineZone { label = "Cheveux", color = new Color(0.45f, 0.4f, 0.45f), outerFade = 0f },
+        new OutlineZone { label = "Peau", color = new Color(0.8f, 0.55f, 0.5f), outerFade = 0f },
+        // Gris bleu, et bord exterieur adouci : les vetements clairs ne sont pas cernes de sombre
+        new OutlineZone { label = "Vetements", color = new Color(0.42f, 0.47f, 0.62f), outerFade = 0.6f },
+        new OutlineZone { label = "Peau + vetements (masque)", color = new Color(0.42f, 0.47f, 0.62f), outerFade = 0.6f },
+    };
+
+    private static bool IsNoOutlineVariant(Material mat) => mat.name.EndsWith(NoOutlineSuffix);
+
+    private static int GetOutlineZone(Material mat) =>
+        mat.HasProperty("_OutlineZone") ? Mathf.Clamp(Mathf.RoundToInt(mat.GetFloat("_OutlineZone")), 0, OutlineZones.Length - 1) : 0;
+
+    private void DrawOutlineSettings(List<Material> allMats)
+    {
+        if (!allMats[0].HasProperty("_Outline")) return;
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Contour (personnages)", EditorStyles.boldLabel);
-        // Le drawer [ToonOutline] du shader active / coupe la passe Outline en meme temps que la valeur
-        DrawToggle(mats, reference, "_Outline", "Activer");
-        if (reference.GetFloat("_Outline") > 0.5f)
+
+        // Les variantes "sans contour" (yeux...) ne suivent pas les reglages du personnage
+        var mats = allMats.Where(m => !IsNoOutlineVariant(m)).ToList();
+        if (mats.Count > 0)
         {
-            DrawColor(mats, reference, "_OutlineColor", "Couleur");
-            DrawFloatSlider(mats, reference, "_OutlineTextureTint", "Teinte par la texture", 0f, 1f);
-            DrawFloatSlider(mats, reference, "_OutlineWidth", "Largeur (pixels en 1080p)", 0f, 8f);
-            DrawFloatSlider(mats, reference, "_OutlineDistance", "Distance de reference (m)", 0.5f, 20f);
-            DrawFloatSlider(mats, reference, "_OutlineZOffset", "Recul (m)", 0f, 0.05f);
-            // Une surface simple face (tissu, meche) laisse voir la coque du contour quand on la voit de dos :
-            // l'afficher des deux cotes la recouvre (et bouche les trous du vetement).
-            if (reference.HasProperty("_Cull"))
+            Material reference = mats[0];
+            // Le drawer [ToonOutline] du shader active / coupe la passe Outline en meme temps que la valeur
+            DrawToggle(mats, reference, "_Outline", "Activer");
+            if (reference.GetFloat("_Outline") > 0.5f)
             {
-                bool twoSided = reference.GetFloat("_Cull") < 0.5f;
-                EditorGUI.BeginChangeCheck();
-                twoSided = EditorGUILayout.Toggle(new GUIContent("Deux faces (tissus, meches)",
-                    "A cocher si des taches sombres apparaissent sur l'interieur des vetements ou des cheveux vus de dos."), twoSided);
-                if (EditorGUI.EndChangeCheck())
-                    SetFloatWithKeywords(mats, "_Cull", twoSided ? 0f : 2f, "Deux faces");
+                DrawOutlineZones(mats);
+                DrawFloatSlider(mats, reference, "_OutlineTextureTint", "Teinte par la texture", 0f, 1f);
+                DrawFloatSlider(mats, reference, "_OutlineOuterFade", "Silhouette exterieure plus claire", 0f, 1f);
+                DrawFloatSlider(mats, reference, "_OutlineWidth", "Largeur (pixels en 1080p)", 0f, 8f);
+                DrawFloatSlider(mats, reference, "_OutlineDistance", "Distance de reference (m)", 0.5f, 20f);
+                DrawFloatSlider(mats, reference, "_OutlineZOffset", "Recul (m)", 0f, 0.05f);
+                // Une surface simple face (tissu, meche) laisse voir la coque du contour quand on la voit de dos :
+                // l'afficher des deux cotes la recouvre (et bouche les trous du vetement).
+                if (reference.HasProperty("_Cull"))
+                {
+                    bool twoSided = reference.GetFloat("_Cull") < 0.5f;
+                    EditorGUI.BeginChangeCheck();
+                    twoSided = EditorGUILayout.Toggle(new GUIContent("Deux faces (tissus, meches)",
+                        "A cocher si des taches sombres apparaissent sur l'interieur des vetements ou des cheveux vus de dos."), twoSided);
+                    if (EditorGUI.EndChangeCheck())
+                        SetFloatWithKeywords(mats, "_Cull", twoSided ? 0f : 2f, "Deux faces");
+                }
+                DrawOutlineNormalsButton();
             }
-            DrawOutlineNormalsButton();
         }
+        DrawNoOutlineObjects();
+    }
+
+    // Une ligne par material pour choisir sa partie, puis une couleur par partie
+    private void DrawOutlineZones(List<Material> mats)
+    {
+        EditorGUILayout.LabelField("Partie de chaque material", EditorStyles.miniBoldLabel);
+        var labels = OutlineZones.Select(z => z.label).ToArray();
+        foreach (var mat in mats)
+        {
+            int zone = GetOutlineZone(mat);
+            EditorGUI.BeginChangeCheck();
+            zone = EditorGUILayout.Popup(mat.name, zone, labels);
+            if (EditorGUI.EndChangeCheck())
+                SetOutlineZone(mat, zone, mats);
+        }
+
+        EditorGUILayout.LabelField("Couleur de chaque partie", EditorStyles.miniBoldLabel);
+        DrawZoneColor(mats, "Cheveux", m => GetOutlineZone(m) == 1, "_OutlineColor");
+        DrawZoneColor(mats, "Peau", m => GetOutlineZone(m) == 2, "_OutlineColor", m => GetOutlineZone(m) == 4, "_OutlineSkinColor");
+        DrawZoneColor(mats, "Vetements", m => GetOutlineZone(m) == 3 || GetOutlineZone(m) == 4, "_OutlineColor");
+        var custom = mats.Where(m => GetOutlineZone(m) == 0).ToList();
+        if (custom.Count > 0)
+            DrawColor(custom, custom[0], "_OutlineColor", "Personnalise");
+
+        // Materials peau + vetements : il leur faut un masque pour savoir ou est la peau
+        var mixed = mats.Where(m => GetOutlineZone(m) == 4).ToList();
+        if (mixed.Count > 0)
+        {
+            DrawTexture(mixed, mixed[0], "_OutlineSkinMask", "Masque peau (blanc = peau)");
+            var missing = mixed.Where(m => m.GetTexture("_OutlineSkinMask") == null).ToList();
+            if (missing.Count > 0)
+                EditorGUILayout.HelpBox("Sans masque, la couleur de peau n'est pas utilisee sur ces materials.", MessageType.Warning);
+            if (GUILayout.Button(new GUIContent(missing.Count > 0 ? "Creer le masque peau (detection automatique)" : "Recreer le masque peau",
+                "Cherche dans la texture les pixels de la couleur de la peau. Le masque (PNG) peut etre retouche dans un logiciel de dessin.")))
+            {
+                foreach (var mat in mixed)
+                {
+                    var mask = CreateSkinMask(mat.GetTexture("_BaseMap") as Texture2D, rampFolder);
+                    if (mask == null) continue;
+                    Undo.RecordObject(mat, "Masque peau");
+                    mat.SetTexture("_OutlineSkinMask", mask);
+                    EditorUtility.SetDirty(mat);
+                }
+                SceneView.RepaintAll();
+            }
+        }
+    }
+
+    public static void SetOutlineZone(Material mat, int zone, List<Material> others)
+    {
+        Undo.RecordObject(mat, "Partie du contour");
+        mat.SetFloat("_OutlineZone", zone);
+        if (zone > 0)
+        {
+            // Reprend la couleur deja choisie pour cette partie sur un autre material, sinon celle par defaut
+            int sameColorZone = zone == 4 ? 3 : zone;
+            var sibling = others.FirstOrDefault(m => m != mat && (GetOutlineZone(m) == sameColorZone || (sameColorZone == 3 && GetOutlineZone(m) == 4)));
+            mat.SetColor("_OutlineColor", sibling != null ? sibling.GetColor("_OutlineColor") : OutlineZones[zone].color);
+            if (zone == 4)
+            {
+                var skin = others.FirstOrDefault(m => m != mat && GetOutlineZone(m) == 2);
+                mat.SetColor("_OutlineSkinColor", skin != null ? skin.GetColor("_OutlineColor") : OutlineZones[2].color);
+            }
+            mat.SetFloat("_OutlineOuterFade", OutlineZones[zone].outerFade);
+        }
+        EditorUtility.SetDirty(mat);
+        SceneView.RepaintAll();
+    }
+
+    // Une couleur partagee par tous les materials d'une partie (et par la couleur peau des materials mixtes)
+    private void DrawZoneColor(List<Material> mats, string label, System.Func<Material, bool> isMain, string mainProperty,
+        System.Func<Material, bool> isSecondary = null, string secondaryProperty = null)
+    {
+        var main = mats.Where(isMain).ToList();
+        var secondary = isSecondary != null ? mats.Where(isSecondary).ToList() : new List<Material>();
+        if (main.Count == 0 && secondary.Count == 0) return;
+        Color current = main.Count > 0 ? main[0].GetColor(mainProperty) : secondary[0].GetColor(secondaryProperty);
+        EditorGUI.BeginChangeCheck();
+        Color value = EditorGUILayout.ColorField(label, current);
+        if (!EditorGUI.EndChangeCheck()) return;
+        foreach (var mat in main)
+        {
+            Undo.RecordObject(mat, "Couleur " + label);
+            mat.SetColor(mainProperty, value);
+            EditorUtility.SetDirty(mat);
+        }
+        foreach (var mat in secondary)
+        {
+            Undo.RecordObject(mat, "Couleur " + label);
+            mat.SetColor(secondaryProperty, value);
+            EditorUtility.SetDirty(mat);
+        }
+        SceneView.RepaintAll();
+    }
+
+    // Masque peau : les pixels qui ont la "chaleur" (rouge - bleu, vert - bleu) de la peau et sont assez clairs.
+    // La teinte de reference est la mediane des pixels clairs et chauds de la texture elle-meme.
+    public static Texture2D CreateSkinMask(Texture2D source, string folder)
+    {
+        if (source == null) return null;
+        int w = source.width, h = source.height;
+        var rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+        Graphics.Blit(source, rt);
+        var previous = RenderTexture.active;
+        RenderTexture.active = rt;
+        var readable = new Texture2D(w, h, TextureFormat.RGBA32, false, false);
+        readable.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+        RenderTexture.active = previous;
+        RenderTexture.ReleaseTemporary(rt);
+        var pixels = readable.GetPixels();
+        DestroyImmediate(readable);
+
+        var warm = pixels.Where(c => c.r > 0.75f && c.r - c.b > 0.08f && c.r - c.b < 0.35f).ToList();
+        if (warm.Count == 0)
+        {
+            EditorUtility.DisplayDialog("Masque peau", "Aucune couleur de peau trouvee dans '" + source.name + "'.", "OK");
+            return null;
+        }
+        float Median(IEnumerable<float> values) { var sorted = values.OrderBy(v => v).ToList(); return sorted[sorted.Count / 2]; }
+        var tone = new Color(Median(warm.Select(c => c.r)), Median(warm.Select(c => c.g)), Median(warm.Select(c => c.b)));
+        float toneWarm = tone.r - tone.b, toneGreen = tone.g - tone.b, toneLum = (tone.r + tone.g + tone.b) / 3f;
+
+        var mask = new Color[pixels.Length];
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            var c = pixels[i];
+            float dw = (c.r - c.b) - toneWarm, dg = (c.g - c.b) - toneGreen;
+            float hue = Mathf.Sqrt(dw * dw + 2f * dg * dg);
+            float darker = toneLum - (c.r + c.g + c.b) / 3f;
+            float s = (1f - Smooth(0.05f, 0.1f, hue)) * (1f - Smooth(0.15f, 0.3f, darker));
+            mask[i] = new Color(s, s, s, 1f);
+        }
+
+        string path = folder + "/MasquePeau_" + source.name + ".png";
+        EnsureFolderExists(folder);
+        var tex = new Texture2D(w, h, TextureFormat.RGB24, false);
+        tex.SetPixels(mask);
+        tex.Apply();
+        File.WriteAllBytes(path, tex.EncodeToPNG());
+        DestroyImmediate(tex);
+
+        AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+        var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+        importer.sRGBTexture = false; // un masque, pas une couleur
+        importer.SaveAndReimport();
+        return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+    }
+
+    // smoothstep du HLSL (Mathf.SmoothStep n'est pas la meme fonction)
+    private static float Smooth(float edge0, float edge1, float x)
+    {
+        float t = Mathf.Clamp01((x - edge0) / (edge1 - edge0));
+        return t * t * (3f - 2f * t);
+    }
+
+    // Objets sans contour (yeux, reflets des yeux...) : l'objet recoit une variante de son material
+    // ("<nom>_SansContour") qui suit tous les autres reglages du material d'origine.
+    private void DrawNoOutlineObjects()
+    {
+        var renderers = Selection.gameObjects.Select(go => go.GetComponent<Renderer>()).Where(r => r != null).ToList();
+        if (renderers.Count == 0) return;
+        bool anyCut = renderers.Any(r => r.sharedMaterials.Any(m => m != null && IsNoOutlineVariant(m)));
+        bool anyOutlined = renderers.Any(r => r.sharedMaterials.Any(m => m != null && !IsNoOutlineVariant(m)
+            && m.HasProperty("_Outline") && m.GetFloat("_Outline") > 0.5f));
+        if (!anyCut && !anyOutlined) return;
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Objets sans contour (yeux, sourcils...)", EditorStyles.miniBoldLabel);
+        EditorGUILayout.BeginHorizontal();
+        if (anyOutlined && GUILayout.Button(new GUIContent("Couper sur " + renderers.Count + " objet(s) selectionne(s)",
+            "Selectionner seulement les objets concernes (ex. les iris) dans la Hierarchy.")))
+            SetObjectsOutline(renderers, false);
+        if (anyCut && GUILayout.Button("Remettre le contour"))
+            SetObjectsOutline(renderers, true);
+        EditorGUILayout.EndHorizontal();
+    }
+
+    private void SetObjectsOutline(List<Renderer> renderers, bool outlined)
+    {
+        foreach (var r in renderers)
+        {
+            var materials = r.sharedMaterials;
+            bool changed = false;
+            for (int i = 0; i < materials.Length; i++)
+            {
+                var mat = materials[i];
+                if (mat == null) continue;
+                Material replacement = null;
+                if (outlined && IsNoOutlineVariant(mat))
+                    replacement = mat.parent;
+                else if (!outlined && !IsNoOutlineVariant(mat) && mat.HasProperty("_Outline"))
+                    replacement = GetOrCreateNoOutlineVariant(mat);
+                if (replacement == null) continue;
+                materials[i] = replacement;
+                changed = true;
+            }
+            if (!changed) continue;
+            Undo.RecordObject(r, outlined ? "Remettre le contour" : "Couper le contour");
+            r.sharedMaterials = materials;
+            PrefabUtility.RecordPrefabInstancePropertyModifications(r);
+        }
+        sceneDataDirty = true;
+        SceneView.RepaintAll();
+    }
+
+    public static Material GetOrCreateNoOutlineVariant(Material mat)
+    {
+        string matPath = AssetDatabase.GetAssetPath(mat);
+        // Material range dans un modele (.fbx, .glb) : la variante va dans le dossier du modele
+        string folder = Path.GetDirectoryName(matPath).Replace('\\', '/');
+        string path = folder + "/" + mat.name + NoOutlineSuffix + ".mat";
+        var variant = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (variant != null) return variant;
+
+        variant = new Material(mat);
+        AssetDatabase.CreateAsset(variant, path);
+        variant.parent = mat;
+        variant.SetFloat("_Outline", 0f);
+        variant.SetShaderPassEnabled(ToonOutlineDrawer.PassLightMode, false);
+        EditorUtility.SetDirty(variant);
+        AssetDatabase.SaveAssetIfDirty(variant);
+        return variant;
     }
 
     // Normales lissees : bouchent les trous du contour aux aretes vives (calculees a l'import du modele)

@@ -66,6 +66,11 @@ Shader "Custom/ToonAdvanced"
         _OutlineWidth ("Largeur (pixels en 1080p)", Range(0,8)) = 2
         _OutlineDistance ("Distance de reference (m)", Range(0.5,20)) = 3
         _OutlineZOffset ("Recul (m) : cache le contour derriere les tissus", Range(0,0.05)) = 0.005
+        // Partie du personnage (reglee par l'outil) : 0 perso, 1 cheveux, 2 peau, 3 vetements, 4 peau + vetements
+        [HideInInspector] _OutlineZone ("Partie", Float) = 0
+        [NoScaleOffset] _OutlineSkinMask ("Masque peau (blanc = peau)", 2D) = "black" {}
+        _OutlineSkinColor ("Couleur sur la peau (masque)", Color) = (0.8,0.55,0.5,1)
+        _OutlineOuterFade ("Silhouette exterieure plus claire", Range(0,1)) = 0
 
         [Header(Rendu)]
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 2
@@ -87,6 +92,7 @@ Shader "Custom/ToonAdvanced"
         TEXTURE2D(_MatCapMap);
         SAMPLER(sampler_MatCapMap);
         TEXTURE2D(_MatCapMask);
+        TEXTURE2D(_OutlineSkinMask);
 
         CBUFFER_START(UnityPerMaterial)
             float4 _BaseMap_ST;
@@ -120,6 +126,8 @@ Shader "Custom/ToonAdvanced"
             half _OutlineWidth;
             half _OutlineDistance;
             half _OutlineZOffset;
+            half4 _OutlineSkinColor;
+            half _OutlineOuterFade;
         CBUFFER_END
 
         // GPU Resident Drawer (Unity 6) / Entities Graphics : variante DOTS_INSTANCING_ON.
@@ -434,6 +442,7 @@ Shader "Custom/ToonAdvanced"
             #pragma multi_compile_fog
             #pragma multi_compile_instancing
             #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
 
             struct Attributes
             {
@@ -499,7 +508,21 @@ Shader "Custom/ToonAdvanced"
                 // Couleur tiree de la texture : la mettre au carre l'assombrit et la sature (cheveux noirs -> trait
                 // noir, peau claire -> trait brun rose), comme les contours par materiau de Genshin.
                 half3 albedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb * _BaseColor.rgb;
-                half3 color = _OutlineColor.rgb * lerp(1.0h, albedo * albedo, _OutlineTextureTint);
+                // Materiau qui melange peau et vetements (ex. corps) : le masque (genere par l'outil) donne
+                // la couleur de la peau la ou il est blanc. Sans masque (noir par defaut), rien ne change.
+                half skin = SAMPLE_TEXTURE2D(_OutlineSkinMask, sampler_BaseMap, IN.uv).r;
+                half3 tint = lerp(_OutlineColor.rgb, _OutlineSkinColor.rgb, skin);
+                half3 color = tint * lerp(1.0h, albedo * albedo, _OutlineTextureTint);
+
+                // Bord exterieur de la silhouette plus clair, traits interieurs (plis, couches) bien marques :
+                // derriere un bord exterieur, la profondeur de la scene est loin derriere le trait.
+                if (_OutlineOuterFade > 0.0h)
+                {
+                    float sceneDepth = LinearEyeDepth(SampleSceneDepth(IN.positionCS.xy / _ScaledScreenParams.xy), _ZBufferParams);
+                    float outlineDepth = LinearEyeDepth(IN.positionCS.z, _ZBufferParams);
+                    half outer = smoothstep(0.3, 1.0, sceneDepth - outlineDepth);
+                    color = lerp(color, albedo, outer * _OutlineOuterFade);
+                }
                 // Suit un peu la lumiere principale (plus sombre et bleute la nuit)
                 color *= lerp(1.0h, min(_MainLightColor.rgb, 1.0h), 0.5h);
                 color = MixFog(color, IN.fogFactor);

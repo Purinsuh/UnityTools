@@ -4,6 +4,10 @@
 
 - ToonAdvanced : **contour de personnage** façon Genshin (coque inversée). La couleur vient de la texture (cheveux sombres → trait noir, peau → trait brun rosé), largeur en pixels qui grossit un peu en gros plan et s'affine au loin, recul pour rester caché derrière les tissus. Désactivé par défaut : la passe est alors coupée sur le materiau, les décors ne paient rien.
 - Outil : section **Contour (personnages)** avec un bouton « Lisser les normales du contour » (bouche les trous aux arêtes vives, calculé à l'import du modèle sans toucher au fichier) et une case « Deux faces » pour les tissus et mèches simple face.
+- Contour : une **partie** par material (Cheveux, Peau, Vêtements, Peau + vêtements) avec une couleur par partie. Vêtements en gris bleu par défaut.
+- Contour : **masque peau** créé automatiquement par l'outil (détection de la couleur de peau dans la texture, PNG retouchable) pour les materials qui mélangent peau et vêtements.
+- Contour : **silhouette extérieure plus claire**, traits intérieurs (plis, couches) bien marqués, comme dans Genshin.
+- Contour : bouton **« Couper sur les objets sélectionnés »** (yeux, reflets…) : l'objet reçoit une variante du material sans contour, qui suit tous les autres réglages.
 - ToonAdvanced : en « deux faces » (Cull Off), l'intérieur est maintenant éclairé de son côté.
 - À la première ouverture du projet, la passe de contour est coupée sur les materiaux ToonAdvanced existants.
 
