@@ -459,7 +459,7 @@ public class ShaderToolsWindow : EditorWindow
         DrawToggle(mats, reference, "_UseEmission", "Activer");
         if (reference.HasProperty("_UseEmission") && reference.GetFloat("_UseEmission") > 0.5f)
         {
-            DrawColor(mats, reference, "_EmissionColor", "Couleur (HDR, > 1 = bloom)", true);
+            DrawColor(mats, reference, "_EmissionColor", "Couleur (HDR, au-dessus du seuil du bloom = brille)", true);
             DrawTexture(mats, reference, "_EmissionMap", "Masque (blanc = brille)");
         }
 
