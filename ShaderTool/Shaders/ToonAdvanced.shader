@@ -1,10 +1,11 @@
 Shader "Custom/ToonAdvanced"
 {
-    // Toon "facon Genshin / ZZZ" pour les decors et objets (pas d'outline, voulu) :
+    // Toon "facon Genshin / ZZZ" pour les decors, objets et personnages (contour reserve aux personnages) :
     //  - ombres par ramp texture (ombres teintees) ou 2 tons seuil + teinte
     //  - ombres portees de la lumiere principale + lumieres secondaires (point / spot)
     //  - rim light (lisere) en mode Fresnel ou Depth (base sur la profondeur ecran)
     //  - reflet speculaire net
+    //  - contour colore facon Genshin (coque inversee) : passe coupee sur le materiau tant qu'il est desactive
     // Chaque effet optionnel est un mot-cle : desactive, il n'est pas compile dans la variante utilisee.
     Properties
     {
@@ -57,6 +58,15 @@ Shader "Custom/ToonAdvanced"
         [HDR] _EmissionColor ("Couleur (HDR)", Color) = (0,0,0,1)
         [NoScaleOffset] _EmissionMap ("Masque (blanc = brille)", 2D) = "white" {}
 
+        [Header(Contour personnages)]
+        // [ToonOutline] : active / coupe la passe Outline du materiau (ToonOutlineDrawer.cs), coupee = aucun cout
+        [ToonOutline] _Outline ("Activer", Float) = 0
+        _OutlineColor ("Couleur", Color) = (0.45,0.38,0.36,1)
+        _OutlineTextureTint ("Teinte par la texture", Range(0,1)) = 1
+        _OutlineWidth ("Largeur (pixels en 1080p)", Range(0,8)) = 2
+        _OutlineDistance ("Distance de reference (m)", Range(0.5,20)) = 3
+        _OutlineZOffset ("Recul (m) : cache le contour derriere les tissus", Range(0,0.05)) = 0.005
+
         [Header(Rendu)]
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 2
     }
@@ -104,6 +114,12 @@ Shader "Custom/ToonAdvanced"
             half4 _EmissionColor;
             half _MatCapStrength;
             half _MatCapAdditive;
+            half _Outline;
+            half4 _OutlineColor;
+            half _OutlineTextureTint;
+            half _OutlineWidth;
+            half _OutlineDistance;
+            half _OutlineZOffset;
         CBUFFER_END
 
         // GPU Resident Drawer (Unity 6) / Entities Graphics : variante DOTS_INSTANCING_ON.
@@ -261,7 +277,7 @@ Shader "Custom/ToonAdvanced"
                 return albedo * light.color * (lit * light.distanceAttenuation * _AdditionalLightsStrength);
             }
 
-            half4 frag(Varyings IN) : SV_Target
+            half4 frag(Varyings IN, FRONT_FACE_TYPE isFrontFace : FRONT_FACE_SEMANTIC) : SV_Target
             {
                 UNITY_SETUP_INSTANCE_ID(IN);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(IN);
@@ -269,7 +285,9 @@ Shader "Custom/ToonAdvanced"
                 LODFadeCrossFade(IN.positionCS);
             #endif
 
+                // Face arriere (Cull Off : tissus, meches) : la normale est retournee pour etre eclairee de son cote
                 half3 normalWS = normalize(IN.normalWS);
+                normalWS = IS_FRONT_VFACE(isFrontFace, normalWS, -normalWS);
                 half3 viewDirWS = GetWorldSpaceNormalizeViewDir(IN.positionWS);
                 half3 albedo = (SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv) * _BaseColor).rgb;
 
@@ -392,6 +410,98 @@ Shader "Custom/ToonAdvanced"
                 color += SAMPLE_TEXTURE2D(_EmissionMap, sampler_BaseMap, IN.uv).rgb * _EmissionColor.rgb;
             #endif
 
+                color = MixFog(color, IN.fogFactor);
+                return half4(color, 1.0h);
+            }
+            ENDHLSL
+        }
+
+        // ---- Outline : contour des personnages (coque inversee) ----
+        // LightMode SRPDefaultUnlit = dessinee par URP juste apres la passe Forward, sans Renderer Feature.
+        // L'outil et ToonOutlineDrawer coupent cette passe sur le materiau quand le contour est desactive :
+        // les decors ne la paient donc jamais.
+        Pass
+        {
+            Name "Outline"
+            Tags { "LightMode"="SRPDefaultUnlit" }
+            Cull Front
+            ZWrite On
+
+            HLSLPROGRAM
+            #pragma target 3.0
+            #pragma vertex OutlineVert
+            #pragma fragment OutlineFrag
+            #pragma multi_compile_fog
+            #pragma multi_compile_instancing
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+
+            struct Attributes
+            {
+                float4 positionOS : POSITION;
+                float3 normalOS : NORMAL;
+                float4 tangentOS : TANGENT;
+                float2 uv : TEXCOORD0;
+                // Normale lissee en espace tangent, ecrite a l'import par ToonOutlineNormals.cs (0 si absente)
+                float3 smoothNormalTS : TEXCOORD7;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+                float2 uv : TEXCOORD0;
+                half fogFactor : TEXCOORD1;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+                UNITY_VERTEX_OUTPUT_STEREO
+            };
+
+            Varyings OutlineVert(Attributes IN)
+            {
+                Varyings OUT = (Varyings)0;
+                UNITY_SETUP_INSTANCE_ID(IN);
+                UNITY_TRANSFER_INSTANCE_ID(IN, OUT);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(OUT);
+
+                // Aux aretes vives, chaque copie du sommet a sa propre normale : la coque s'ouvrirait.
+                // La normale lissee (moyenne des normales a cette position) la garde fermee.
+                float3 normalOS = IN.normalOS;
+                if (dot(IN.smoothNormalTS, IN.smoothNormalTS) > 0.01)
+                {
+                    float3 bitangentOS = cross(IN.normalOS, IN.tangentOS.xyz) * IN.tangentOS.w;
+                    normalOS = IN.tangentOS.xyz * IN.smoothNormalTS.x + bitangentOS * IN.smoothNormalTS.y + IN.normalOS * IN.smoothNormalTS.z;
+                }
+
+                // Recul le long du rayon de vue : meme place a l'ecran, mais un peu plus loin. Vue de dos, une
+                // surface simple face (tissu, meche) laisse voir sa coque : la face arriere du tissu (Cull Off)
+                // passe alors devant et seul le bord du contour reste visible.
+                float3 positionWS = TransformObjectToWorld(IN.positionOS.xyz);
+                positionWS += normalize(positionWS - GetCameraPositionWS()) * _OutlineZOffset;
+                float4 positionCS = TransformWorldToHClip(positionWS);
+                float3 normalCS = mul((float3x3)UNITY_MATRIX_VP, TransformObjectToWorldNormal(normalOS));
+
+                // Largeur en pixels (reference 1080p) exacte a _OutlineDistance : plus pres le trait grossit (x2 max,
+                // gros plans), plus loin il s'affine comme un vrai trait sur l'objet.
+                float pixels = _OutlineWidth * (_ScreenParams.y / 1080.0) * min(2.0, _OutlineDistance / max(positionCS.w, 0.001));
+                float2 dirPx = normalCS.xy * _ScreenParams.xy;
+                dirPx *= rsqrt(max(dot(dirPx, dirPx), 1e-8));
+                positionCS.xy += dirPx * (pixels * 2.0 / _ScreenParams.xy) * positionCS.w;
+
+                // Garde-fou si la passe n'a pas ete coupee alors que le contour est desactive : rien n'est trace
+                OUT.positionCS = _Outline > 0.5 ? positionCS : float4(2.0, 2.0, 2.0, 1.0);
+                OUT.uv = TRANSFORM_TEX(IN.uv, _BaseMap);
+                OUT.fogFactor = ComputeFogFactor(positionCS.z);
+                return OUT;
+            }
+
+            half4 OutlineFrag(Varyings IN) : SV_Target
+            {
+                UNITY_SETUP_INSTANCE_ID(IN);
+                // Couleur tiree de la texture : la mettre au carre l'assombrit et la sature (cheveux noirs -> trait
+                // noir, peau claire -> trait brun rose), comme les contours par materiau de Genshin.
+                half3 albedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb * _BaseColor.rgb;
+                half3 color = _OutlineColor.rgb * lerp(1.0h, albedo * albedo, _OutlineTextureTint);
+                // Suit un peu la lumiere principale (plus sombre et bleute la nuit)
+                color *= lerp(1.0h, min(_MainLightColor.rgb, 1.0h), 0.5h);
                 color = MixFog(color, IN.fogFactor);
                 return half4(color, 1.0h);
             }

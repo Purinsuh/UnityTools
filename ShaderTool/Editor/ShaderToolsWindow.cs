@@ -462,6 +462,62 @@ public class ShaderToolsWindow : EditorWindow
             DrawColor(mats, reference, "_EmissionColor", "Couleur (HDR, > 1 = bloom)", true);
             DrawTexture(mats, reference, "_EmissionMap", "Masque (blanc = brille)");
         }
+
+        if (!reference.HasProperty("_Outline")) return;
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Contour (personnages)", EditorStyles.boldLabel);
+        // Le drawer [ToonOutline] du shader active / coupe la passe Outline en meme temps que la valeur
+        DrawToggle(mats, reference, "_Outline", "Activer");
+        if (reference.GetFloat("_Outline") > 0.5f)
+        {
+            DrawColor(mats, reference, "_OutlineColor", "Couleur");
+            DrawFloatSlider(mats, reference, "_OutlineTextureTint", "Teinte par la texture", 0f, 1f);
+            DrawFloatSlider(mats, reference, "_OutlineWidth", "Largeur (pixels en 1080p)", 0f, 8f);
+            DrawFloatSlider(mats, reference, "_OutlineDistance", "Distance de reference (m)", 0.5f, 20f);
+            DrawFloatSlider(mats, reference, "_OutlineZOffset", "Recul (m)", 0f, 0.05f);
+            // Une surface simple face (tissu, meche) laisse voir la coque du contour quand on la voit de dos :
+            // l'afficher des deux cotes la recouvre (et bouche les trous du vetement).
+            if (reference.HasProperty("_Cull"))
+            {
+                bool twoSided = reference.GetFloat("_Cull") < 0.5f;
+                EditorGUI.BeginChangeCheck();
+                twoSided = EditorGUILayout.Toggle(new GUIContent("Deux faces (tissus, meches)",
+                    "A cocher si des taches sombres apparaissent sur l'interieur des vetements ou des cheveux vus de dos."), twoSided);
+                if (EditorGUI.EndChangeCheck())
+                    SetFloatWithKeywords(mats, "_Cull", twoSided ? 0f : 2f, "Deux faces");
+            }
+            DrawOutlineNormalsButton();
+        }
+    }
+
+    // Normales lissees : bouchent les trous du contour aux aretes vives (calculees a l'import du modele)
+    private void DrawOutlineNormalsButton()
+    {
+        var models = new HashSet<string>();
+        foreach (var go in Selection.gameObjects)
+        {
+            foreach (var r in go.GetComponentsInChildren<Renderer>(true))
+            {
+                Mesh mesh = r is SkinnedMeshRenderer skinned ? skinned.sharedMesh
+                    : r.TryGetComponent<MeshFilter>(out var filter) ? filter.sharedMesh : null;
+                string path = mesh != null ? AssetDatabase.GetAssetPath(mesh) : null;
+                if (!string.IsNullOrEmpty(path) && AssetImporter.GetAtPath(path) is ModelImporter)
+                    models.Add(path);
+            }
+        }
+        if (models.Count == 0) return;
+
+        bool allMarked = models.All(ToonOutlineNormals.IsMarked);
+        EditorGUILayout.HelpBox(allMarked
+            ? "Normales lissees actives sur le modele : le contour reste ferme aux aretes vives."
+            : "Si le contour a des trous aux aretes vives (coutures, accessoires), lisser les normales du modele. " +
+              "Le fichier du modele n'est pas modifie : c'est calcule a l'import.", MessageType.None);
+        if (GUILayout.Button(allMarked ? "Retirer les normales lissees" : "Lisser les normales du contour"))
+        {
+            foreach (string path in models)
+                ToonOutlineNormals.SetMarked(path, !allMarked);
+            SceneView.RepaintAll();
+        }
     }
 
     // Les proprietes avec [Toggle] / [KeywordEnum] dans le shader pilotent un mot-cle : apres avoir change

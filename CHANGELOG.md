@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+- ToonAdvanced : **contour de personnage** façon Genshin (coque inversée). La couleur vient de la texture (cheveux sombres → trait noir, peau → trait brun rosé), largeur en pixels qui grossit un peu en gros plan et s'affine au loin, recul pour rester caché derrière les tissus. Désactivé par défaut : la passe est alors coupée sur le materiau, les décors ne paient rien.
+- Outil : section **Contour (personnages)** avec un bouton « Lisser les normales du contour » (bouche les trous aux arêtes vives, calculé à l'import du modèle sans toucher au fichier) et une case « Deux faces » pour les tissus et mèches simple face.
+- ToonAdvanced : en « deux faces » (Cull Off), l'intérieur est maintenant éclairé de son côté.
+- À la première ouverture du projet, la passe de contour est coupée sur les materiaux ToonAdvanced existants.
+
 ## 1.2.2
 
 - Conversion : reprend aussi la texture / couleur des materials **glTF** (importés avec glTFast, ex. modèles Sketchfab) et **Built-in** (`_MainTex` / `_Color`). Avant, ces materials étaient convertis sans leur texture.

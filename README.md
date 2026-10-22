@@ -6,7 +6,7 @@ Boite a outils personnelle de shaders stylises et d'outils d'editeur pour URP, p
 
 ### Shaders (`ShaderTool/Shaders/`)
 
-- **ToonAdvanced.shader** — Le shader principal, façon Genshin / ZZZ, pour décors et objets : ramp ou atlas de ramps (avec version nuit), liseré Fresnel ou Depth, reflet net, reflet métal (MatCap), émissif HDR, lumières secondaires. Optimisé (effets désactivés = coût nul, SRP Batcher, Forward+, fondu LOD, GPU Resident Drawer, ombres précalculées shadowmask). Le liseré Depth demande la texture de profondeur de la caméra.
+- **ToonAdvanced.shader** — Le shader principal, façon Genshin / ZZZ, pour décors, objets et personnages : ramp ou atlas de ramps (avec version nuit), liseré Fresnel ou Depth, reflet net, reflet métal (MatCap), émissif HDR, lumières secondaires, contour coloré par la texture pour les personnages (coupé par défaut, sans coût). Optimisé (effets désactivés = coût nul, SRP Batcher, Forward+, fondu LOD, GPU Resident Drawer, ombres précalculées shadowmask). Le liseré Depth demande la texture de profondeur de la caméra.
 - **ToonSky.shader** — Ciel qui suit le jour/nuit (étoiles et dégradé la nuit).
 - **CelShading.shader** — Cell shading avec bandes clair/ombre nettes, recoit et projette les vraies ombres de la lumiere directionnelle (shadow map). Conserve la couleur/texture d'origine de l'objet (`_BaseMap` / `_BaseColor`).
 - **ToonOutline.shader** — Toon shading 2 tons avec un contour noir integre (technique de la coque inversee).
@@ -21,7 +21,7 @@ Boite a outils personnelle de shaders stylises et d'outils d'editeur pour URP, p
 
 **ShaderToolsWindow.cs** — Fenetre accessible via `Tools > Outils Shaders > Editeur`, avec 5 onglets :
 
-1. **Reglages** — Ajuste en direct les materials ToonAdvanced (préréglages Doux / Contraste / Simple, version décor, ombres, ligne d'atlas, liseré, reflets, émissif) et `MangaDotsOutline*` des objets selectionnes dans la Hierarchy.
+1. **Reglages** — Ajuste en direct les materials ToonAdvanced (préréglages Doux / Contraste / Simple, version décor, ombres, ligne d'atlas, liseré, reflets, émissif, contour des personnages avec lissage des normales du modèle) et `MangaDotsOutline*` des objets selectionnes dans la Hierarchy.
 2. **Conversion** — Liste tous les materials de la scene active, permet de les convertir en masse vers un shader cible (Cell Shading par defaut) tout en conservant couleur/texture d'origine. Cree les nouveaux materials dans `Assets/ShaderTools/Materials` (dossier cree automatiquement si absent, modifiable dans l'outil).
 3. **Historique** — Garde la trace persistante (survit a la fermeture d'Unity, contrairement a Ctrl+Z) du material d'origine de chaque objet converti, avec possibilite de revenir en arriere. Fonctionne aussi sur les prefabs.
 4. **Ramp** — Génère les textures de ramp (simple, ou atlas avec une ligne par matière et une version nuit) dans `Assets/ShaderTools/Ramps`. Une ramp créée par l'outil peut être rechargée pour être retouchée.
