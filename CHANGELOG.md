@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0
+
+- Nouvel onglet **Atmosphère** dans l'outil : ambiances prêtes à l'emploi (Extérieur jour clair, matin brumeux, coucher de soleil, nuit ; Intérieur chaleureux, frais et lumineux, mystérieux ; Aucune) posées en un clic pour **toute la scène** ou pour une **zone** (pièce, cave…) créée autour des objets sélectionnés. Unity fond les ambiances quand la caméra passe d'une zone à l'autre. Réglages modifiables dans l'outil.
+- Nouvel effet **ToonAtmosphere** (dossier `Runtime/` + shader `Hidden/Toon/Atmosphere`) : voile coloré selon la distance (couleur proche → lointaine), brume au sol en extérieur, voile sur l'horizon du ciel, halo vers le soleil, teinte de nuit qui suit ToonDayNight. Chaque ambiance règle aussi la balance des blancs et la vignette, sans toucher au reste du post-process. Aucun coût quand aucune ambiance n'est active.
+- L'outil installe l'effet sur les renderers URP du projet en un bouton.
+- Le package dépend maintenant explicitement d'URP 17.3.
+
 ## 1.3.0
 
 - ToonAdvanced : **contour de personnage** façon Genshin (coque inversée). La couleur vient de la texture (cheveux sombres → trait noir, peau → trait brun rosé), largeur en pixels qui grossit un peu en gros plan et s'affine au loin, recul pour rester caché derrière les tissus. Désactivé par défaut : la passe est alors coupée sur le materiau, les décors ne paient rien.

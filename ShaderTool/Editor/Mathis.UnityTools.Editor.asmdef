@@ -2,7 +2,9 @@
     "name": "Mathis.UnityTools.Editor",
     "rootNamespace": "",
     "references": [
-        "Mathis.UnityTools.Runtime"
+        "Mathis.UnityTools.Runtime",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime"
     ],
     "includePlatforms": [
         "Editor"

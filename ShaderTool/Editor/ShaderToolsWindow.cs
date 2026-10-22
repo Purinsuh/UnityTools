@@ -12,6 +12,7 @@ public class ShaderToolsWindow : EditorWindow
     private const string DefaultCelShader = "Custom/CelShading";
     private const string DefaultMaterialsFolder = "Assets/ShaderTools/Materials";
     private const string DefaultRampFolder = "Assets/ShaderTools/Ramps";
+    private const string AtmosphereFolder = "Assets/ShaderTools/Atmospheres";
     private const string HistoryAssetPath = "Assets/ShaderTools/Materials/MaterialConversionHistory.asset";
 
     [MenuItem("Tools/Outils Shaders/Editeur")]
@@ -109,14 +110,15 @@ public class ShaderToolsWindow : EditorWindow
             }
         }
 
-        tab = GUILayout.Toolbar(tab, new[] { "Reglages", "Conversion", "Historique", "Ramp", "Jour / Nuit" });
+        tab = GUILayout.Toolbar(tab, new[] { "Reglages", "Conversion", "Historique", "Ramp", "Jour / Nuit", "Atmosphere" });
         EditorGUILayout.Space();
 
         if (tab == 0) DrawSettingsTab();
         else if (tab == 1) DrawConversionTab();
         else if (tab == 2) DrawHistoryTab();
         else if (tab == 3) DrawRampTab();
-        else DrawDayNightTab();
+        else if (tab == 4) DrawDayNightTab();
+        else ToonAtmosphereTools.DrawTab(AtmosphereFolder);
     }
 
     // =====================================================================
