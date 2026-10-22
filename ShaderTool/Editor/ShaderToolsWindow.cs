@@ -10,6 +10,8 @@ public class ShaderToolsWindow : EditorWindow
     private const string ShaderTextured = "Custom/MangaDotsOutlineTextured";
     private const string ShaderToon = "Custom/ToonAdvanced";
     private const string DefaultCelShader = "Custom/CelShading";
+    // Shader propose par defaut dans l'onglet Convertir : le shader principal des decors
+    private const string DefaultTargetShader = "Custom/ToonAdvanced";
     private const string DefaultMaterialsFolder = "Assets/ShaderTools/Materials";
     private const string DefaultRampFolder = "Assets/ShaderTools/Ramps";
     private const string AtmosphereFolder = "Assets/ShaderTools/Atmospheres";
@@ -39,7 +41,7 @@ public class ShaderToolsWindow : EditorWindow
         EditorApplication.hierarchyChanged += OnHierarchyChanged;
         ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
         if (targetShader == null)
-            targetShader = Shader.Find(DefaultCelShader);
+            targetShader = Shader.Find(DefaultTargetShader);
         MarkSceneDataDirty();
     }
 
@@ -98,28 +100,43 @@ public class ShaderToolsWindow : EditorWindow
         // Layout et la passe Repaint d'une meme image (sinon erreur "Invalid GUILayout state").
         if (Event.current.type == EventType.Layout)
         {
-            if (tab == 1 && sceneDataDirty)
+            if (tab == TabConvert && sceneDataDirty)
             {
                 RefreshMaterialList();
                 sceneDataDirty = false;
             }
-            if (tab == 2 && historyDirty)
+            if (tab == TabHistory && historyDirty)
             {
                 RefreshHistory();
                 historyDirty = false;
             }
         }
 
-        tab = GUILayout.Toolbar(tab, new[] { "Reglages", "Conversion", "Historique", "Ramp", "Jour / Nuit", "Atmosphere" });
+        // En-tete : l'ordre de travail conseille, et l'aide qu'on peut masquer une fois l'outil connu
+        EditorGUILayout.BeginHorizontal();
+        EditorGUILayout.LabelField("Ordre conseillé : 1 Convertir → 2 Régler → 3 Atmosphère → 4 Jour / Nuit", EditorStyles.miniLabel);
+        bool help = GUILayout.Toggle(ShowHelp, new GUIContent("Aide", "Afficher les explications en haut de chaque onglet"), EditorStyles.miniButton, GUILayout.Width(45));
+        if (help != ShowHelp) EditorPrefs.SetBool(HelpPrefKey, help);
+        EditorGUILayout.EndHorizontal();
+
+        tab = GUILayout.Toolbar(tab, new[] { "1 Convertir", "2 Régler", "3 Atmosphère", "4 Jour / Nuit", "Ramps", "Historique" }, GUILayout.Height(24));
         EditorGUILayout.Space();
 
-        if (tab == 0) DrawSettingsTab();
-        else if (tab == 1) DrawConversionTab();
-        else if (tab == 2) DrawHistoryTab();
-        else if (tab == 3) DrawRampTab();
-        else if (tab == 4) DrawDayNightTab();
-        else ToonAtmosphereTools.DrawTab(AtmosphereFolder);
+        if (tab == TabConvert) DrawConversionTab();
+        else if (tab == TabSettings) DrawSettingsTab();
+        else if (tab == TabAtmosphere)
+        {
+            scroll = EditorGUILayout.BeginScrollView(scroll);
+            ToonAtmosphereTools.DrawTab(AtmosphereFolder, ShowHelp);
+            EditorGUILayout.EndScrollView();
+        }
+        else if (tab == TabDayNight) DrawDayNightTab();
+        else if (tab == TabRamp) DrawRampTab();
+        else DrawHistoryTab();
     }
+
+    // Onglets dans l'ordre de travail
+    private const int TabConvert = 0, TabSettings = 1, TabAtmosphere = 2, TabDayNight = 3, TabRamp = 4, TabHistory = 5;
 
     // =====================================================================
     // Onglet 5 : jour / nuit de la scene active (composant ToonDayNight)
@@ -127,12 +144,10 @@ public class ShaderToolsWindow : EditorWindow
 
     private void DrawDayNightTab()
     {
-        EditorGUILayout.LabelField("Jour / Nuit de la scene active", EditorStyles.boldLabel);
-        EditorGUILayout.HelpBox(
-            "Pilote en une fois les ramps de nuit des materials ToonAdvanced, le ciel ToonSky, la lumiere " +
-            "principale, l'ambiance et les reflets. Les couleurs de jour et de nuit se reglent sur le composant.",
-            MessageType.Info);
-        EditorGUILayout.Space();
+        TabHelp("Fait passer toute la scène du jour à la nuit : ombres des materials, ciel, soleil, lumière ambiante, reflets.\n" +
+            "1. Clique sur « Ajouter le jour / nuit » (une fois par scène).\n" +
+            "2. Utilise les boutons Jour / Crépuscule / Nuit, ou le curseur.\n" +
+            "Les couleurs de jour et de nuit se règlent sur le composant (bouton en bas).");
 
         var dayNight = FindFirstObjectByType<ToonDayNight>();
         if (dayNight == null)
@@ -261,15 +276,19 @@ public class ShaderToolsWindow : EditorWindow
     {
         var mats = GetCompatibleMaterials();
 
-        EditorGUILayout.LabelField("Editeur rapide (selection)", EditorStyles.boldLabel);
-        EditorGUILayout.Space();
+        TabHelp("Règle l'apparence des objets sélectionnés.\n" +
+            "1. Sélectionne un ou plusieurs objets dans la scène ou la Hierarchy (un mur, un meuble, un personnage...).\n" +
+            "2. Choisis un style de base.\n" +
+            "3. Déplie une section pour affiner. Ctrl+Z annule.");
 
         if (mats.Count == 0)
         {
             EditorGUILayout.HelpBox(
-                "Selectionne dans la Hierarchy un ou plusieurs objets utilisant le shader\n" +
-                "'Custom/ToonAdvanced', 'Custom/MangaDotsOutline' ou 'Custom/MangaDotsOutlineTextured'.",
-                MessageType.Info);
+                "Aucun objet sélectionné n'utilise un shader de l'outil.\n" +
+                "Sélectionne des objets dans la scène, ou convertis d'abord leurs materials (onglet 1).",
+                MessageType.Warning);
+            if (GUILayout.Button("Aller à « 1 Convertir »", GUILayout.Height(26)))
+                tab = TabConvert;
             return;
         }
 
@@ -339,134 +358,167 @@ public class ShaderToolsWindow : EditorWindow
     private void DrawToonSettings(List<Material> mats)
     {
         Material reference = mats[0];
-        EditorGUILayout.LabelField("Toon Advanced (" + mats.Count + ")", EditorStyles.largeLabel);
+        EditorGUILayout.LabelField("Toon Advanced (" + mats.Count + " material(s))", EditorStyles.largeLabel);
 
-        EditorGUILayout.LabelField("Prereglages (ecrase les valeurs ci-dessous)", EditorStyles.miniBoldLabel);
-        EditorGUILayout.BeginHorizontal();
-        foreach (var preset in ToonPresets)
+        // Le point de départ : un style complet en un clic, les sections en dessous servent à affiner
+        using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
         {
-            if (GUILayout.Button(new GUIContent(preset.label, preset.tooltip)))
-                ApplyToonPreset(mats, preset, rampFolder, presetForDecor);
-        }
-        EditorGUILayout.EndHorizontal();
-        presetForDecor = EditorGUILayout.ToggleLeft(new GUIContent(
-            "Version decor : sans lisere (murs, sols, plafonds)",
-            "Meme look que le prereglage, mais le lisere est coupe. Sur les grandes surfaces il ne se voit presque pas " +
-            "et c'est la que se trouvent la plupart des pixels de l'ecran : autant ne pas le calculer."), presetForDecor);
-
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Ombres", EditorStyles.boldLabel);
-        DrawToggle(mats, reference, "_UseRamp", "Utiliser une Ramp");
-        if (reference.GetFloat("_UseRamp") > 0.5f)
-        {
-            DrawRampTextureField(mats, reference);
-            var atlas = ReadAtlasData(reference.GetTexture("_RampMap"));
-            if (atlas != null)
+            EditorGUILayout.LabelField("Style de base (remplace les réglages ci-dessous)", EditorStyles.boldLabel);
+            EditorGUILayout.BeginHorizontal();
+            foreach (var preset in ToonPresets)
             {
-                int current = Mathf.Clamp(Mathf.RoundToInt(reference.GetFloat("_RampRow")), 0, atlas.names.Length - 1);
-                EditorGUI.BeginChangeCheck();
-                int row = EditorGUILayout.Popup(new GUIContent("Ligne de l'atlas", atlas.hasNight ? "Version jour/nuit incluse" : "Pas de version nuit"), current, atlas.names);
-                if (EditorGUI.EndChangeCheck())
+                if (GUILayout.Button(new GUIContent(preset.label, preset.tooltip), GUILayout.Height(26)))
+                    ApplyToonPreset(mats, preset, rampFolder, presetForDecor);
+            }
+            EditorGUILayout.EndHorizontal();
+            presetForDecor = EditorGUILayout.ToggleLeft(new GUIContent(
+                "Pour un décor (murs, sols, plafonds) : sans bord lumineux",
+                "Même look, mais le liseré est coupé. Sur les grandes surfaces il ne se voit presque pas " +
+                "et c'est là que se trouvent la plupart des pixels de l'écran : autant ne pas le calculer."), presetForDecor);
+        }
+
+        if (Section("Ombres", "Ombres", "Couleur des ombres, netteté de la limite ombre / lumière, ombres projetées."))
+        {
+            DrawToggle(mats, reference, "_UseRamp", "Utiliser une Ramp");
+            if (reference.GetFloat("_UseRamp") > 0.5f)
+            {
+                DrawRampTextureField(mats, reference);
+                var atlas = ReadAtlasData(reference.GetTexture("_RampMap"));
+                if (atlas != null)
                 {
-                    SetRampRow(mats, row);
-                    SceneView.RepaintAll();
+                    int current = Mathf.Clamp(Mathf.RoundToInt(reference.GetFloat("_RampRow")), 0, atlas.names.Length - 1);
+                    EditorGUI.BeginChangeCheck();
+                    int row = EditorGUILayout.Popup(new GUIContent("Ligne de l'atlas", atlas.hasNight ? "Version jour/nuit incluse" : "Pas de version nuit"), current, atlas.names);
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        SetRampRow(mats, row);
+                        SceneView.RepaintAll();
+                    }
                 }
             }
+            else
+                DrawColor(mats, reference, "_ShadowColor", "Teinte d'ombre");
+            DrawFloatSlider(mats, reference, "_ShadowSaturation", "Saturation des ombres", 0f, 1f);
+            DrawFloatSlider(mats, reference, "_ShadowThreshold", "Seuil ombre / lumiere", 0f, 1f);
+            DrawFloatSlider(mats, reference, "_ShadowSmoothness", "Douceur du bord", 0.001f, 0.5f);
+            DrawFloatSlider(mats, reference, "_ReceiveShadowStrength", "Force des ombres portees", 0f, 1f);
+            DrawFloatSlider(mats, reference, "_AmbientStrength", "Lumiere ambiante", 0f, 1f);
         }
-        else
-            DrawColor(mats, reference, "_ShadowColor", "Teinte d'ombre");
-        DrawFloatSlider(mats, reference, "_ShadowSaturation", "Saturation des ombres", 0f, 1f);
-        DrawFloatSlider(mats, reference, "_ShadowThreshold", "Seuil ombre / lumiere", 0f, 1f);
-        DrawFloatSlider(mats, reference, "_ShadowSmoothness", "Douceur du bord", 0.001f, 0.5f);
-        DrawFloatSlider(mats, reference, "_ReceiveShadowStrength", "Force des ombres portees", 0f, 1f);
-        DrawFloatSlider(mats, reference, "_AmbientStrength", "Lumiere ambiante", 0f, 1f);
 
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Rim Light (lisere)", EditorStyles.boldLabel);
-        DrawPopup(mats, reference, "_Rim", "Mode", new[] { "Off", "Fresnel", "Depth" });
-        if (reference.GetFloat("_Rim") > 0.5f)
+        if (Section("Rim", "Bord lumineux (liseré)", "Fine ligne claire (ou sombre en mode Encre) sur les bords des objets."))
         {
-            if (reference.HasProperty("_RimBlend"))
+            DrawPopup(mats, reference, "_Rim", "Mode", new[] { "Off", "Fresnel", "Depth" });
+            if (reference.GetFloat("_Rim") > 0.5f)
             {
-                int blend = Mathf.RoundToInt(reference.GetFloat("_RimBlend"));
-                EditorGUI.BeginChangeCheck();
-                blend = EditorGUILayout.Popup(new GUIContent("Melange",
-                    "Lumiere : le lisere eclaircit le bord (un noir n'a aucun effet).\nEncre : le lisere remplace la couleur, pour un contour sombre."),
-                    blend, new[] { "Lumiere (eclaircit)", "Encre (contour)" });
-                if (EditorGUI.EndChangeCheck())
+                if (reference.HasProperty("_RimBlend"))
                 {
+                    int blend = Mathf.RoundToInt(reference.GetFloat("_RimBlend"));
+                    EditorGUI.BeginChangeCheck();
+                    blend = EditorGUILayout.Popup(new GUIContent("Melange",
+                        "Lumiere : le lisere eclaircit le bord (un noir n'a aucun effet).\nEncre : le lisere remplace la couleur, pour un contour sombre."),
+                        blend, new[] { "Lumiere (eclaircit)", "Encre (contour)" });
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        foreach (var mat in mats)
+                        {
+                            Undo.RecordObject(mat, "Melange du lisere");
+                            mat.SetFloat("_RimBlend", blend);
+                            // Passage en Encre : contour noir tout autour (le reglage "cote eclaire" le couperait d'un cote)
+                            if (blend == 1)
+                            {
+                                mat.SetColor("_RimColor", Color.black);
+                                mat.SetFloat("_RimLightAlign", 0f);
+                                mat.SetFloat("_RimAlbedoTint", 0f);
+                            }
+                            EditorUtility.SetDirty(mat);
+                        }
+                        SceneView.RepaintAll();
+                    }
+                }
+                DrawColor(mats, reference, "_RimColor", "Couleur", true);
+                DrawFloatSlider(mats, reference, "_RimWidth", "Largeur", 0f, 1f);
+                DrawFloatSlider(mats, reference, "_RimSoftness", "Douceur", 0.001f, 0.5f);
+                DrawFloatSlider(mats, reference, "_RimLightAlign", "Cote eclaire uniquement", 0f, 1f);
+                DrawFloatSlider(mats, reference, "_RimAlbedoTint", "Teinte par la couleur de base", 0f, 1f);
+                if (reference.GetFloat("_Rim") > 1.5f)
+                    DrawFloatSlider(mats, reference, "_RimDepthThreshold", "Ecart de profondeur min", 0.01f, 2f);
+            }
+        }
+
+        if (Section("Reflets", "Reflets (brillance, métal)", "Petit reflet net de la lumière, et reflet métallique (or, acier...)."))
+        {
+            EditorGUILayout.LabelField("Reflet net", EditorStyles.miniBoldLabel);
+            DrawToggle(mats, reference, "_Specular", "Activer");
+            if (reference.GetFloat("_Specular") > 0.5f)
+            {
+                DrawColor(mats, reference, "_SpecularColor", "Couleur", true);
+                DrawFloatSlider(mats, reference, "_SpecularSize", "Taille", 0f, 0.5f);
+                DrawFloatSlider(mats, reference, "_SpecularSoftness", "Douceur", 0.001f, 0.2f);
+            }
+
+            EditorGUILayout.LabelField("Reflet métal (MatCap)", EditorStyles.miniBoldLabel);
+            DrawToggle(mats, reference, "_UseMatCap", "Activer");
+            if (reference.HasProperty("_UseMatCap") && reference.GetFloat("_UseMatCap") > 0.5f)
+            {
+                DrawTexture(mats, reference, "_MatCapMap", "MatCap");
+                if (GUILayout.Button("Utiliser la MatCap metal par defaut"))
+                {
+                    var matcap = GetOrCreateDefaultMatCap(rampFolder + "/" + DefaultMatCapName + ".png");
                     foreach (var mat in mats)
                     {
-                        Undo.RecordObject(mat, "Melange du lisere");
-                        mat.SetFloat("_RimBlend", blend);
-                        // Passage en Encre : contour noir tout autour (le reglage "cote eclaire" le couperait d'un cote)
-                        if (blend == 1)
-                        {
-                            mat.SetColor("_RimColor", Color.black);
-                            mat.SetFloat("_RimLightAlign", 0f);
-                            mat.SetFloat("_RimAlbedoTint", 0f);
-                        }
+                        Undo.RecordObject(mat, "MatCap par defaut");
+                        mat.SetTexture("_MatCapMap", matcap);
                         EditorUtility.SetDirty(mat);
                     }
                     SceneView.RepaintAll();
                 }
+                DrawFloatSlider(mats, reference, "_MatCapStrength", "Force", 0f, 1f);
+                DrawFloatSlider(mats, reference, "_MatCapAdditive", "Mode (0 metal - 1 brillance)", 0f, 1f);
+                DrawTexture(mats, reference, "_MatCapMask", "Masque (blanc = metal)");
             }
-            DrawColor(mats, reference, "_RimColor", "Couleur", true);
-            DrawFloatSlider(mats, reference, "_RimWidth", "Largeur", 0f, 1f);
-            DrawFloatSlider(mats, reference, "_RimSoftness", "Douceur", 0.001f, 0.5f);
-            DrawFloatSlider(mats, reference, "_RimLightAlign", "Cote eclaire uniquement", 0f, 1f);
-            DrawFloatSlider(mats, reference, "_RimAlbedoTint", "Teinte par la couleur de base", 0f, 1f);
-            if (reference.GetFloat("_Rim") > 1.5f)
-                DrawFloatSlider(mats, reference, "_RimDepthThreshold", "Ecart de profondeur min", 0.01f, 2f);
         }
 
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Reflet speculaire", EditorStyles.boldLabel);
-        DrawToggle(mats, reference, "_Specular", "Activer");
-        if (reference.GetFloat("_Specular") > 0.5f)
+        if (Section("Lumiere", "Lumières et émissif", "Effet des lampes de la scène, et objets qui brillent eux-mêmes (néons, écrans)."))
         {
-            DrawColor(mats, reference, "_SpecularColor", "Couleur", true);
-            DrawFloatSlider(mats, reference, "_SpecularSize", "Taille", 0f, 0.5f);
-            DrawFloatSlider(mats, reference, "_SpecularSoftness", "Douceur", 0.001f, 0.2f);
-        }
-
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Reflet metal (MatCap)", EditorStyles.boldLabel);
-        DrawToggle(mats, reference, "_UseMatCap", "Activer");
-        if (reference.HasProperty("_UseMatCap") && reference.GetFloat("_UseMatCap") > 0.5f)
-        {
-            DrawTexture(mats, reference, "_MatCapMap", "MatCap");
-            if (GUILayout.Button("Utiliser la MatCap metal par defaut"))
+            DrawFloatSlider(mats, reference, "_AdditionalLightsStrength", "Lampes de la scène (intensité)", 0f, 2f);
+            EditorGUILayout.LabelField("Émissif (néons, écrans, lampes)", EditorStyles.miniBoldLabel);
+            DrawToggle(mats, reference, "_UseEmission", "Activer");
+            if (reference.HasProperty("_UseEmission") && reference.GetFloat("_UseEmission") > 0.5f)
             {
-                var matcap = GetOrCreateDefaultMatCap(rampFolder + "/" + DefaultMatCapName + ".png");
-                foreach (var mat in mats)
-                {
-                    Undo.RecordObject(mat, "MatCap par defaut");
-                    mat.SetTexture("_MatCapMap", matcap);
-                    EditorUtility.SetDirty(mat);
-                }
-                SceneView.RepaintAll();
+                DrawColor(mats, reference, "_EmissionColor", "Couleur (HDR, au-dessus du seuil du bloom = brille)", true);
+                DrawTexture(mats, reference, "_EmissionMap", "Masque (blanc = brille)");
             }
-            DrawFloatSlider(mats, reference, "_MatCapStrength", "Force", 0f, 1f);
-            DrawFloatSlider(mats, reference, "_MatCapAdditive", "Mode (0 metal - 1 brillance)", 0f, 1f);
-            DrawTexture(mats, reference, "_MatCapMask", "Masque (blanc = metal)");
         }
 
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Lumieres secondaires", EditorStyles.boldLabel);
-        DrawFloatSlider(mats, reference, "_AdditionalLightsStrength", "Intensite", 0f, 2f);
-
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Emissif (neons, ecrans, lampes)", EditorStyles.boldLabel);
-        DrawToggle(mats, reference, "_UseEmission", "Activer");
-        if (reference.HasProperty("_UseEmission") && reference.GetFloat("_UseEmission") > 0.5f)
-        {
-            DrawColor(mats, reference, "_EmissionColor", "Couleur (HDR, au-dessus du seuil du bloom = brille)", true);
-            DrawTexture(mats, reference, "_EmissionMap", "Masque (blanc = brille)");
-        }
-
-        DrawOutlineSettings(mats);
+        if (reference.HasProperty("_Outline") &&
+            Section("Contour", "Contour (personnages)", "Trait autour des personnages, avec une couleur par partie (cheveux, peau, vêtements). À laisser coupé sur le décor."))
+            DrawOutlineSettings(mats);
     }
+
+    // =====================================================================
+    // Mise en page : aide repliable et sections a deplier (memorisees d'une session a l'autre)
+    // =====================================================================
+
+    private const string HelpPrefKey = "ShaderTools_ShowHelp";
+    private static bool ShowHelp => EditorPrefs.GetBool(HelpPrefKey, true);
+
+    private static bool Section(string key, string title, string summary)
+    {
+        string pref = "ShaderTools_Section_" + key;
+        bool open = EditorPrefs.GetBool(pref, false);
+        EditorGUILayout.Space(4);
+        bool now = EditorGUILayout.BeginFoldoutHeaderGroup(open, new GUIContent(title, summary));
+        EditorGUILayout.EndFoldoutHeaderGroup();
+        if (now != open) EditorPrefs.SetBool(pref, now);
+        if (now && ShowHelp) EditorGUILayout.LabelField(summary, EditorStyles.wordWrappedMiniLabel);
+        return now;
+    }
+
+    private static void TabHelp(string text)
+    {
+        if (ShowHelp) EditorGUILayout.HelpBox(text, MessageType.Info);
+    }
+
 
     // =====================================================================
     // Contour des personnages : une "partie" par material (cheveux, peau, vetements) avec sa couleur,
@@ -501,8 +553,6 @@ public class ShaderToolsWindow : EditorWindow
     private void DrawOutlineSettings(List<Material> allMats)
     {
         if (!allMats[0].HasProperty("_Outline")) return;
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Contour (personnages)", EditorStyles.boldLabel);
 
         // Les variantes "sans contour" (yeux...) ne suivent pas les reglages du personnage
         var mats = allMats.Where(m => !IsNoOutlineVariant(m)).ToList();
@@ -1084,7 +1134,7 @@ public class ShaderToolsWindow : EditorWindow
     {
         if (targetShader == null)
         {
-            targetShader = Shader.Find(DefaultCelShader);
+            targetShader = Shader.Find(DefaultTargetShader);
         }
 
         // Les cases cochees survivent au rescan (qui peut maintenant arriver sans clic de l'utilisateur)
@@ -1168,12 +1218,15 @@ public class ShaderToolsWindow : EditorWindow
 
     private void DrawConversionTab()
     {
-        EditorGUILayout.LabelField("Conversion de materials (scene active)", EditorStyles.boldLabel);
-        EditorGUILayout.Space();
+        TabHelp("Première étape : donne le style toon aux objets de la scène, en gardant leurs textures et couleurs.\n" +
+            "1. Laisse « ToonAdvanced » comme shader (le shader principal pour le décor).\n" +
+            "2. Coche les materials à convertir, ou « Tout sélectionner ».\n" +
+            "3. Clique sur « Convertir la sélection ». Les originaux ne sont pas modifiés, l'onglet Historique permet de revenir en arrière.\n" +
+            "Ensuite, règle le style dans l'onglet 2.");
 
         EditorGUILayout.BeginHorizontal();
         EditorGUI.BeginChangeCheck();
-        targetShader = (Shader)EditorGUILayout.ObjectField("Shader cible", targetShader, typeof(Shader), false);
+        targetShader = (Shader)EditorGUILayout.ObjectField(new GUIContent("Shader cible", "ToonAdvanced par défaut"), targetShader, typeof(Shader), false);
         if (EditorGUI.EndChangeCheck())
             sceneDataDirty = true; // le statut "deja converti" depend du shader cible
         if (GUILayout.Button("Rafraichir", GUILayout.Width(80)))
@@ -1566,13 +1619,9 @@ public class ShaderToolsWindow : EditorWindow
 
     private void DrawHistoryTab()
     {
-        EditorGUILayout.LabelField("Historique des conversions", EditorStyles.boldLabel);
-        EditorGUILayout.HelpBox(
-            "Garde la trace du material d'origine de chaque objet converti, meme apres avoir ferme et rouvert le projet " +
-            "(contrairement a Ctrl+Z, qui ne survit pas a la fermeture d'Unity). Fonctionne aussi sur les prefabs : " +
-            "la reversion met a jour l'instance du prefab correctement.",
-            MessageType.Info);
-        EditorGUILayout.Space();
+        TabHelp("Permet de revenir aux materials d'origine des objets convertis, même après avoir fermé Unity " +
+            "(Ctrl+Z, lui, est perdu à la fermeture). Fonctionne aussi sur les prefabs.\n" +
+            "Coche les objets puis « Revenir au material d'origine ».");
 
         if (GUILayout.Button("Rafraichir l'historique"))
         {
@@ -1768,11 +1817,9 @@ public class ShaderToolsWindow : EditorWindow
         if (rampGradient == null)
             rampGradient = MakeGradient(ToonPresets[0].rampColors, ToonPresets[0].rampTimes, false);
 
-        EditorGUILayout.LabelField("Generateur de ramp (Custom/ToonAdvanced)", EditorStyles.boldLabel);
-        EditorGUILayout.HelpBox(
-            "Gauche = cote a l'ombre, droite = cote eclaire. Le milieu correspond au profil de l'objet " +
-            "(la limite ombre / lumiere). Plusieurs couleurs = plusieurs bandes d'ombre.",
-            MessageType.Info);
+        TabHelp("Pour aller plus loin : crée les dégradés qui donnent la couleur des ombres (une « ramp »).\n" +
+            "Gauche = côté à l'ombre, droite = côté éclairé. Plusieurs couleurs = plusieurs bandes d'ombre.\n" +
+            "Les styles de base de l'onglet 2 utilisent déjà des ramps prêtes : cet onglet est facultatif.");
 
         EditorGUI.BeginChangeCheck();
         rampToLoad = (Texture2D)EditorGUILayout.ObjectField(new GUIContent("Retoucher", "Glisser une ramp ou un atlas cree par cet outil pour modifier ses degrades"), rampToLoad, typeof(Texture2D), false);

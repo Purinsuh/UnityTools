@@ -5,6 +5,8 @@
 - Nouvel onglet **Atmosphère** dans l'outil : ambiances prêtes à l'emploi (Extérieur jour clair, matin brumeux, coucher de soleil, nuit ; Intérieur chaleureux, frais et lumineux, mystérieux ; Aucune) posées en un clic pour **toute la scène** ou pour une **zone** (pièce, cave…) créée autour des objets sélectionnés. Unity fond les ambiances quand la caméra passe d'une zone à l'autre. Réglages modifiables dans l'outil.
 - Nouvel effet **ToonAtmosphere** (dossier `Runtime/` + shader `Hidden/Toon/Atmosphere`) : voile coloré selon la distance (couleur proche → lointaine), brume au sol en extérieur, voile sur l'horizon du ciel, halo vers le soleil, teinte de nuit qui suit ToonDayNight. Chaque ambiance règle aussi la balance des blancs et la vignette, sans toucher au reste du post-process. Aucun coût quand aucune ambiance n'est active.
 - L'outil installe l'effet sur les renderers URP du projet en un bouton.
+- Ambiances **Sombre / flippant** : Brouillard angoissant, Alarme rouge, Lieu abandonné, Nuit sans lune (assombrissent et désaturent aussi l'image). Les ambiances sont présentées en boutons colorés, par famille, avec une description au survol.
+- Fenêtre plus simple à prendre en main : onglets dans l'ordre de travail (1 Convertir, 2 Régler, 3 Atmosphère, 4 Jour / Nuit, puis Ramps et Historique), mode d'emploi en haut de chaque onglet (bouton « Aide » pour le masquer), réglages ToonAdvanced rangés en sections dépliables, ToonAdvanced proposé par défaut pour la conversion.
 - Le package dépend maintenant explicitement d'URP 17.3.
 
 ## 1.3.0
