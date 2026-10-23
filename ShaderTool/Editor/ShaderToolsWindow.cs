@@ -566,7 +566,14 @@ public class ShaderToolsWindow : EditorWindow
         // Gris bleu, et bord exterieur adouci : les vetements clairs ne sont pas cernes de sombre
         new OutlineZone { label = "Vetements", color = new Color(0.42f, 0.47f, 0.62f), outerFade = 0.6f },
         new OutlineZone { label = "Peau + vetements (masque)", color = new Color(0.42f, 0.47f, 0.62f), outerFade = 0.6f },
+        // Contour de peau, eclairage en sphere et pas d'ombres portees (ToonFaceNormals.cs)
+        new OutlineZone { label = "Visage", color = new Color(0.8f, 0.55f, 0.5f), outerFade = 0f },
     };
+
+    private const int FaceZone = 5;
+    // Recul du contour du visage : le cache sur le rebord des paupieres (l'oeil est enfonce d'environ 1 cm)
+    // tout en le gardant sur le menton et les joues
+    private const float FaceZOffset = 0.02f;
 
     private static bool IsNoOutlineVariant(Material mat) => mat.name.EndsWith(NoOutlineSuffix);
 
@@ -623,10 +630,15 @@ public class ShaderToolsWindow : EditorWindow
             EditorGUILayout.BeginVertical();
             EditorGUILayout.LabelField(new GUIContent(shortNames[i], mat.name + (baseMap != null ? "\nTexture : " + baseMap.name : "")), EditorStyles.boldLabel);
             int zone = GetOutlineZone(mat);
+            int previousZone = zone;
             EditorGUI.BeginChangeCheck();
             zone = EditorGUILayout.Popup(zone, labels);
             if (EditorGUI.EndChangeCheck())
+            {
                 SetOutlineZone(mat, zone, mats);
+                if ((previousZone == FaceZone) != (zone == FaceZone))
+                    SetFaceMarks(CollectFaceParts(new[] { mat }, false, out _), zone == FaceZone);
+            }
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndHorizontal();
             TrackHover(row, mat);
@@ -634,7 +646,10 @@ public class ShaderToolsWindow : EditorWindow
 
         // Peau : materials "Peau" + la partie peau (masque) des materials "Peau + vetements"
         var mixed = mats.Where(m => GetOutlineZone(m) == 4).ToList();
+        var faces = mats.Where(m => GetOutlineZone(m) == FaceZone).ToList();
         DrawZoneSettings("Cheveux", mats.Where(m => GetOutlineZone(m) == 1).ToList(), new List<Material>());
+        DrawZoneSettings("Visage", faces, new List<Material>(), true);
+        if (faces.Count > 0) DrawFaceStatus(faces);
         DrawZoneSettings("Peau", mats.Where(m => GetOutlineZone(m) == 2).ToList(), mixed);
         DrawZoneSettings("Vetements", mats.Where(m => GetOutlineZone(m) == 3 || GetOutlineZone(m) == 4).ToList(), new List<Material>());
         DrawZoneSettings("Personnalise", mats.Where(m => GetOutlineZone(m) == 0).ToList(), new List<Material>());
@@ -664,7 +679,7 @@ public class ShaderToolsWindow : EditorWindow
 
     // Reglages d'une partie, partages par tous ses materials. "skinOfMixed" : materials peau + vetements, dont seules
     // la couleur et la largeur de la peau (masque) suivent cette partie ; le recul et la silhouette sont ceux des vetements.
-    private void DrawZoneSettings(string label, List<Material> main, List<Material> skinOfMixed)
+    private void DrawZoneSettings(string label, List<Material> main, List<Material> skinOfMixed, bool face = false)
     {
         if (main.Count == 0 && skinOfMixed.Count == 0) return;
         // Survoler le bloc d'une partie allume tous ses materials dans la vue Scene
@@ -677,6 +692,12 @@ public class ShaderToolsWindow : EditorWindow
         {
             DrawZoneValue(main, "_OutlineZOffset", null, null, label, "Recul (m)", false, 0f, 0.05f);
             DrawZoneValue(main, "_OutlineOuterFade", null, null, label, "Silhouette exterieure plus claire", false, 0f, 1f);
+        }
+        // Visage : 1 = s'eclaire comme une forme ronde (une seule limite d'ombre), 0 = selon son relief
+        if (face && main[0].HasProperty("_FaceSphere"))
+        {
+            DrawZoneValue(main, "_FaceSphere", null, null, label, "Eclairage en sphere", false, 0f, 1f);
+            DrawZoneValue(main, "_ReceiveShadowStrength", null, null, label, "Ombres portees (meches, tete)", false, 0f, 1f);
         }
         EditorGUI.indentLevel--;
         EditorGUILayout.EndVertical();
@@ -840,6 +861,8 @@ public class ShaderToolsWindow : EditorWindow
     public static void SetOutlineZone(Material mat, int zone, List<Material> others)
     {
         Undo.RecordObject(mat, "Partie du contour");
+        int previousZone = GetOutlineZone(mat);
+        bool wasFace = previousZone == FaceZone;
         mat.SetFloat("_OutlineZone", zone);
         if (zone > 0)
         {
@@ -854,6 +877,16 @@ public class ShaderToolsWindow : EditorWindow
                 mat.SetFloat("_OutlineZOffset", sibling.GetFloat("_OutlineZOffset"));
                 mat.SetFloat("_OutlineOuterFade", sibling.GetFloat("_OutlineOuterFade"));
             }
+            else if (zone == FaceZone)
+            {
+                // Premier visage : meme trait que la peau (la sienne s'il etait deja "Peau"), mais recule pour ne
+                // pas souligner les paupieres
+                var skin = previousZone == 2 ? mat : others.FirstOrDefault(m => m != mat && GetOutlineZone(m) == 2);
+                mat.SetColor("_OutlineColor", skin != null ? skin.GetColor("_OutlineColor") : OutlineZones[zone].color);
+                if (skin != null) mat.SetFloat("_OutlineWidth", skin.GetFloat("_OutlineWidth"));
+                mat.SetFloat("_OutlineZOffset", Mathf.Max(skin != null ? skin.GetFloat("_OutlineZOffset") : 0f, FaceZOffset));
+                mat.SetFloat("_OutlineOuterFade", skin != null ? skin.GetFloat("_OutlineOuterFade") : OutlineZones[zone].outerFade);
+            }
             else
             {
                 mat.SetColor("_OutlineColor", OutlineZones[zone].color);
@@ -866,8 +899,79 @@ public class ShaderToolsWindow : EditorWindow
                 mat.SetFloat("_OutlineSkinWidth", skin != null ? skin.GetFloat("_OutlineWidth") : mat.GetFloat("_OutlineWidth"));
             }
         }
+        // Visage : eclairage en sphere et pas d'ombres portees (les meches y feraient des taches dures),
+        // comme sur un autre visage deja regle. En quittant cette partie, le material retrouve un eclairage normal.
+        if (mat.HasProperty("_FaceSphere"))
+        {
+            if (zone == FaceZone)
+            {
+                var face = others.FirstOrDefault(m => m != mat && GetOutlineZone(m) == FaceZone);
+                mat.SetFloat("_FaceSphere", face != null ? face.GetFloat("_FaceSphere") : 1f);
+                mat.SetFloat("_ReceiveShadowStrength", face != null ? face.GetFloat("_ReceiveShadowStrength") : 0f);
+            }
+            else if (wasFace)
+            {
+                mat.SetFloat("_FaceSphere", 0f);
+                mat.SetFloat("_ReceiveShadowStrength", 1f);
+            }
+        }
         EditorUtility.SetDirty(mat);
         SceneView.RepaintAll();
+    }
+
+    // Sous-maillages des objets selectionnes qui utilisent ces materials de visage (ou leur variante sans contour :
+    // yeux...), regroupes par fichier modele. "onlyMissing" : seulement ceux dont l'eclairage n'est pas encore calcule.
+    private Dictionary<string, List<string>> CollectFaceParts(IEnumerable<Material> faceMats, bool onlyMissing, out bool notModel)
+    {
+        var mats = new HashSet<Material>(faceMats);
+        var byModel = new Dictionary<string, List<string>>();
+        notModel = false;
+        foreach (var r in GetSelectedRenderers())
+        {
+            if (r == null) continue;
+            var shared = r.sharedMaterials;
+            Mesh mesh = r is SkinnedMeshRenderer skinned ? skinned.sharedMesh
+                : r.TryGetComponent<MeshFilter>(out var filter) ? filter.sharedMesh : null;
+            if (mesh == null) continue;
+            string path = null;
+            for (int i = 0; i < shared.Length && i < mesh.subMeshCount; i++)
+            {
+                var m = shared[i];
+                if (m == null || !(mats.Contains(m) || (IsNoOutlineVariant(m) && m.parent != null && mats.Contains(m.parent)))) continue;
+                if (path == null) path = AssetDatabase.GetAssetPath(mesh);
+                // Maillage cree par script ou enregistre a part (.asset) : pas d'import, donc pas de calcul possible
+                if (string.IsNullOrEmpty(path) || !(AssetImporter.GetAtPath(path) is ModelImporter)) { notModel = true; break; }
+                string part = ToonFaceNormals.PartName(mesh, i);
+                if (onlyMissing && ToonFaceNormals.IsMarked(path, part)) continue;
+                if (!byModel.TryGetValue(path, out var parts)) byModel[path] = parts = new List<string>();
+                if (!parts.Contains(part)) parts.Add(part);
+            }
+        }
+        return byModel;
+    }
+
+    // Reimporte les modeles apres le dessin de la fenetre (un import pendant OnGUI casserait la mise en page)
+    private static void SetFaceMarks(Dictionary<string, List<string>> byModel, bool marked)
+    {
+        if (byModel.Count == 0) return;
+        EditorApplication.delayCall += () =>
+        {
+            foreach (var pair in byModel)
+                ToonFaceNormals.SetMarked(pair.Key, pair.Value, marked);
+            SceneView.RepaintAll();
+        };
+    }
+
+    private void DrawFaceStatus(List<Material> faces)
+    {
+        var missing = CollectFaceParts(faces, true, out bool notModel);
+        if (notModel)
+            EditorGUILayout.HelpBox("Visage : un des objets n'a pas de fichier modele (FBX...) : il garde son eclairage selon le relief.", MessageType.Info);
+        if (missing.Count == 0) return;
+        EditorGUILayout.HelpBox("Visage : l'eclairage en sphere n'est pas encore calcule pour ce modele (calcul a l'import, " +
+            "le fichier du modele n'est pas modifie).", MessageType.Warning);
+        if (GUILayout.Button("Calculer l'eclairage du visage"))
+            SetFaceMarks(missing, true);
     }
 
 

@@ -26,6 +26,8 @@ Shader "Custom/ToonAdvanced"
         _ShadowSaturation ("Saturation des ombres", Range(0,1)) = 0
         _ReceiveShadowStrength ("Force des ombres portees", Range(0,1)) = 1
         _AmbientStrength ("Lumiere ambiante", Range(0,1)) = 0.1
+        // Visage : s'eclaire comme une forme ronde (normale calculee a l'import par ToonFaceNormals.cs, regle par l'outil)
+        _FaceSphere ("Visage : eclairage en sphere", Range(0,1)) = 0
 
         [Header(Rim Light)]
         [KeywordEnum(Off, Fresnel, Depth)] _Rim ("Mode", Float) = 0
@@ -66,7 +68,7 @@ Shader "Custom/ToonAdvanced"
         _OutlineWidth ("Largeur (pixels en 1080p)", Range(0,8)) = 2
         _OutlineDistance ("Distance de reference (m)", Range(0.5,20)) = 3
         _OutlineZOffset ("Recul (m) : cache le contour derriere les tissus", Range(0,0.05)) = 0.005
-        // Partie du personnage (reglee par l'outil) : 0 perso, 1 cheveux, 2 peau, 3 vetements, 4 peau + vetements
+        // Partie du personnage (reglee par l'outil) : 0 perso, 1 cheveux, 2 peau, 3 vetements, 4 peau + vetements, 5 visage
         [HideInInspector] _OutlineZone ("Partie", Float) = 0
         [NoScaleOffset] _OutlineSkinMask ("Masque peau (blanc = peau)", 2D) = "black" {}
         _OutlineSkinColor ("Couleur sur la peau (masque)", Color) = (0.8,0.55,0.5,1)
@@ -107,6 +109,7 @@ Shader "Custom/ToonAdvanced"
             half _ShadowSaturation;
             half _ReceiveShadowStrength;
             half _AmbientStrength;
+            half _FaceSphere;
             half4 _RimColor;
             half _RimWidth;
             half _RimSoftness;
@@ -201,8 +204,11 @@ Shader "Custom/ToonAdvanced"
             {
                 float4 positionOS : POSITION;
                 float3 normalOS : NORMAL;
+                float4 tangentOS : TANGENT;
                 float2 uv : TEXCOORD0;
                 float2 lightmapUV : TEXCOORD1;
+                // Normale "en sphere" du visage en espace tangent, ecrite a l'import par ToonFaceNormals.cs (0 si absente)
+                float3 faceNormalTS : TEXCOORD6;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -231,6 +237,18 @@ Shader "Custom/ToonAdvanced"
                 OUT.positionCS = posInputs.positionCS;
                 OUT.positionWS = posInputs.positionWS;
                 OUT.normalWS = TransformObjectToWorldNormal(IN.normalOS);
+                // Visage : l'ombre suit une forme ronde au lieu du relief (nez, pommettes, bouche), ce qui donne
+                // une seule limite nette qui glisse proprement quand la lumiere tourne. Espace tangent : suit
+                // aussi la tete animee (skinning).
+                if (_FaceSphere > 0.0 && dot(IN.faceNormalTS, IN.faceNormalTS) > 0.01)
+                {
+                    // Normalises : apres le skinning sur GPU, normale et tangente ne sont plus de longueur 1
+                    float3 normalOS = normalize(IN.normalOS);
+                    float3 tangentOS = normalize(IN.tangentOS.xyz);
+                    float3 bitangentOS = cross(normalOS, tangentOS) * (IN.tangentOS.w < 0.0 ? -1.0 : 1.0);
+                    float3 faceOS = tangentOS * IN.faceNormalTS.x + bitangentOS * IN.faceNormalTS.y + normalOS * IN.faceNormalTS.z;
+                    OUT.normalWS = lerp(OUT.normalWS, TransformObjectToWorldNormal(faceOS), _FaceSphere);
+                }
                 OUT.uv = TRANSFORM_TEX(IN.uv, _BaseMap);
                 OUT.fogFactor = ComputeFogFactor(posInputs.positionCS.z);
             #if defined(LIGHTMAP_ON)
@@ -483,8 +501,11 @@ Shader "Custom/ToonAdvanced"
                 float3 normalOS = IN.normalOS;
                 if (dot(IN.smoothNormalTS, IN.smoothNormalTS) > 0.01)
                 {
-                    float3 bitangentOS = cross(IN.normalOS, IN.tangentOS.xyz) * IN.tangentOS.w;
-                    normalOS = IN.tangentOS.xyz * IN.smoothNormalTS.x + bitangentOS * IN.smoothNormalTS.y + IN.normalOS * IN.smoothNormalTS.z;
+                    // Normalises : apres le skinning sur GPU, normale et tangente ne sont plus de longueur 1
+                    float3 n = normalize(IN.normalOS);
+                    float3 t = normalize(IN.tangentOS.xyz);
+                    float3 bitangentOS = cross(n, t) * (IN.tangentOS.w < 0.0 ? -1.0 : 1.0);
+                    normalOS = t * IN.smoothNormalTS.x + bitangentOS * IN.smoothNormalTS.y + n * IN.smoothNormalTS.z;
                 }
 
                 // Recul le long du rayon de vue : meme place a l'ecran, mais un peu plus loin. Vue de dos, une

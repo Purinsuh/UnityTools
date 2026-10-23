@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.0
+
+- **Contour** : nouvelle partie **« Visage »** dans la liste des parties. Le visage ne s'éclaire plus selon son relief (nez, pommettes, bouche : taches anguleuses quand la lumière vient de côté) mais comme une forme ronde : une seule limite d'ombre, nette, qui glisse proprement quand la lumière tourne, comme dans les jeux anime. Les ombres portées (mèches, tête) sont coupées sur ce material.
+  - Calculé à l'import du modèle (nouveau `ToonFaceNormals.cs`, le fichier du modèle n'est pas modifié) ; suit les têtes animées. Le centre de la tête est trouvé automatiquement, même si le visage est coupé en plusieurs morceaux.
+  - Choisir « Visage » pour **tous** les materials de la peau du visage (certains modèles en ont deux : bas du visage, yeux et front). Les yeux coupés (« sans contour ») de ces materials suivent.
+  - Le bloc « Visage » a deux curseurs en plus : « Éclairage en sphère » (0 = relief, 1 = forme ronde) et « Ombres portées (mèches, tête) ». Recul du contour à 0,02 par défaut (pas de trait sur le rebord des paupières), en gardant la couleur et la largeur du trait de peau.
+  - Remettre une autre partie rend au material son éclairage normal.
+- **ToonAdvanced** : nouveau réglage `_FaceSphere` (0 par défaut : les materials existants ne changent pas).
+- **Contour** : sur les personnages animés, la direction du contour lissé est maintenant correcte (normale et tangente renormalisées après l'animation sur GPU).
+
 ## 1.5.2
 
 - **Contour** : la liste « Partie de chaque material » est lisible même dans une fenêtre étroite. Chaque ligne montre une vignette de la texture, un nom court (les morceaux communs à tous les materials sont retirés, le nom de la texture est préféré : `Hair`, `Body`, `Dress`...) et le choix de la partie sur toute la largeur. Le nom complet et la texture s'affichent au survol.
