@@ -193,6 +193,8 @@ public static class ToonAtmosphereTools
     private static List<ScriptableRendererData> GetMissingRenderers() =>
         GetRendererDatas().Distinct().Where(d => !d.rendererFeatures.Any(f => f is ToonAtmosphereFeature)).ToList();
 
+    public static bool IsInstalled() => GetMissingRenderers().Count == 0;
+
     private static bool DrawInstallation()
     {
         var missing = GetMissingRenderers();

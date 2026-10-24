@@ -132,7 +132,7 @@ public class ShaderToolsWindow : EditorWindow
         EditorGUILayout.EndHorizontal();
 
         // Deux rangees : les 4 etapes du travail, puis les outils complementaires
-        tab = GUILayout.SelectionGrid(tab, new[] { "1 Convertir", "2 Régler", "3 Atmosphère", "4 Jour / Nuit", "Ramps", "Historique", "Vérifier la scène" }, 4, GUILayout.Height(46));
+        tab = GUILayout.SelectionGrid(tab, new[] { "1 Convertir", "2 Régler", "3 Atmosphère", "4 Jour / Nuit", "Ramps", "Historique", "Vérifier la scène", "Préparer le projet" }, 4, GUILayout.Height(46));
         EditorGUILayout.Space();
 
         if (tab == TabConvert) DrawConversionTab();
@@ -152,14 +152,15 @@ public class ShaderToolsWindow : EditorWindow
             EditorGUILayout.EndScrollView();
         }
         else if (tab == TabHistory) DrawHistoryTab();
-        else ToonSceneAudit.DrawTab(ShowHelp);
+        else if (tab == TabAudit) ToonSceneAudit.DrawTab(ShowHelp);
+        else ToonProjectSetup.DrawTab(AtmosphereFolder, ShowHelp);
 
         if (Event.current.type == EventType.Repaint)
             SetHighlight(hoveredMaterials);
     }
 
     // Onglets dans l'ordre de travail
-    private const int TabConvert = 0, TabSettings = 1, TabAtmosphere = 2, TabDayNight = 3, TabRamp = 4, TabHistory = 5, TabAudit = 6;
+    private const int TabConvert = 0, TabSettings = 1, TabAtmosphere = 2, TabDayNight = 3, TabRamp = 4, TabHistory = 5, TabAudit = 6, TabProject = 7;
 
     // =====================================================================
     // Onglet 5 : jour / nuit de la scene active (composant ToonDayNight)
@@ -1515,7 +1516,8 @@ public class ShaderToolsWindow : EditorWindow
 
     private void DrawConversionTab()
     {
-        TabHelp("Première étape : donne le style toon aux objets de la scène, en gardant leurs textures et couleurs.\n" +
+        TabHelp("Nouveau projet ? Commence par l'onglet « Préparer le projet ».\n" +
+            "Première étape : donne le style toon aux objets de la scène, en gardant leurs textures et couleurs.\n" +
             "1. Laisse « ToonAdvanced » comme shader (le shader principal pour le décor).\n" +
             "2. Coche les materials à convertir, ou « Tout sélectionner ».\n" +
             "3. Clique sur « Convertir la sélection ». Les originaux ne sont pas modifiés, l'onglet Historique permet de revenir en arrière.\n" +

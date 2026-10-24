@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.0
+
+- Nouvel onglet **Préparer le projet** : ce qu'il faut régler une fois dans un nouveau projet, puis dans chaque nouvelle scène, pour que les shaders s'affichent comme prévu. Chaque étape est cochée quand elle est déjà faite (rien n'est modifié sans clic), « Faire » pour une étape, « Tout préparer » pour toutes, Ctrl+Z annule ce qui touche à la scène.
+  - Projet : rendu URP (vérifié), espace de couleur linéaire, profondeur et HDR dans les réglages URP, effet d'atmosphère installé, dossiers du jeu avec leurs règles d'import, `.gitignore` pour Git (au choix).
+  - Scène ouverte : volume global « Post-process toon » (ACES, bloom réservé aux émissifs, contraste et saturation relevés ; un seul profil `PostProcess_Toon.asset` partagé par toutes les scènes), caméras avec post-process et anti-aliasing SMAA, soleil avec ombres douces.
+- **Règles d'import par dossier** (dans le même onglet) : chaque fichier qui arrive dans un dossier reçoit ses réglages, sans que personne n'ait à y penser :
+  - textures : taille max par dossier (jamais agrandies), normal maps (`_n`, `_nrm`, `normal`) et masques (`mask`, `_ao`, `rough`, `metal`, `lightmap`...) reconnus à leur nom, sprites sans mipmaps pour l'interface ;
+  - modèles : normales lissées du contour pour les personnages, LOD automatiques d'Unity 6 pour le décor, caméras et lumières exportées avec le modèle ignorées.
+  - Les règles ne s'appliquent qu'aux nouveaux fichiers (une retouche à la main n'est jamais écrasée) ; le bouton « Appliquer aux fichiers déjà dans ce dossier » met à jour l'existant. Elles sont enregistrées dans `ProjectSettings/ShaderToolsImportRules.json` : partagées avec l'équipe par Git.
+- Onglet Convertir : l'aide rappelle de commencer par « Préparer le projet » dans un nouveau projet.
+
 ## 1.6.0
 
 - **Contour** : nouvelle partie **« Visage »** dans la liste des parties. Le visage ne s'éclaire plus selon son relief (nez, pommettes, bouche : taches anguleuses quand la lumière vient de côté) mais comme une forme ronde : une seule limite d'ombre, nette, qui glisse proprement quand la lumière tourne, comme dans les jeux anime. Les ombres portées (mèches, tête) sont coupées sur ce material.
